@@ -96,7 +96,7 @@ function drawHome() {
 /* ---------- optional desk extras (defensive; never invent numbers) ---------- */
 const WAIT = `<div class="wait">Waiting for data from your agents</div>`;
 const PIPE_STAGES = ["SCAN", "ANALYZE", "DEBATE", "CONSENSUS", "IDEA"];
-const ROLE_MAP = { scanner: "Scanner", auditor: "Auditor", analyst: "Analyst", executor: "Executor", risk: "Risk" };
+const ROLE_MAP = { scanner: "Scanner", auditor: "Auditor", analyst: "Analyst", executor: "Executor", risk: "Risk", desk: "Desk" };
 function pickList(b, key) {
   if (!b) return null;
   if (Array.isArray(b[key])) return b[key];
@@ -116,16 +116,63 @@ function convPct(v) {
   if (n > 1 && n <= 100) return Math.round(n);
   return null;
 }
+function beatAge(a) {
+  if (!a || a.last_beat == null || a.last_beat === "") return Infinity;
+  let t = Number(a.last_beat);
+  if (!isFinite(t)) return Infinity;
+  if (t > 1e12) t /= 1000;
+  return Date.now() / 1000 - t;
+}
+function agentBusy(a) {
+  const d = String((a && a.detail) || "");
+  const num = (re) => { const m = d.match(re); return m ? Number(m[1]) : 0; };
+  if (/\bauditing\b/i.test(d)) return true;
+  if (num(/queue\s+(\d+)/i) > 0) return true;
+  if (num(/waiting\s+(\d+)/i) > 0) return true;
+  if (num(/\bopen\s+(\d+)/i) > 0) return true;
+  return false;
+}
+function agentRunState(a) {
+  if (!a) return "stale";
+  const paused = a.paused === true || a.paused === 1 || a.paused === "true"
+    || String(a.status || "").toLowerCase() === "paused";
+  if (paused) return "stopped";
+  const age = beatAge(a);
+  const st = String(a.status || "").toLowerCase();
+  if (!isFinite(age) || age > STALE_S || st === "down" || st === "error" || st === "offline") return "stale";
+  return agentBusy(a) ? "running" : "idle";
+}
+function stateLabel(st) {
+  const s = String(st || "").toLowerCase();
+  if (s === "running") return "RUNNING";
+  if (s === "idle") return "IDLE";
+  if (s === "stopped" || s === "paused" || s === "off") return "STOPPED";
+  if (s === "stale" || s === "down") return "STALE";
+  return String(st || "IDLE").toUpperCase();
+}
+function stateDotClass(st) {
+  const s = String(st || "idle").toLowerCase();
+  if (s === "running") return "pulse";
+  if (s === "idle") return "idle";
+  if (s === "stopped" || s === "paused" || s === "off") return "off";
+  return "down";
+}
 function statePillClass(st) {
   const s = String(st || "idle").toLowerCase().replace(/\s+/g, "");
-  if (s.includes("veto") || s === "down" || s === "error" || s === "off") return "veto";
+  if (s === "running") return "running";
+  if (s === "idle" || s === "ok" || s === "ready") return "idle";
+  if (s === "stopped" || s === "paused" || s === "off") return "stopped";
+  if (s === "stale" || s === "down" || s === "error" || s === "offline" || s.includes("veto")) return "stale";
   if (s.includes("debat")) return "debating";
   if (s.includes("scan")) return "scanning";
   if (s.includes("analy")) return "analyzing";
   if (s.includes("consensus")) return "consensus";
   if (s.includes("idea")) return "idea";
-  if (s === "ok" || s === "idle" || s === "ready" || s === "running") return "idle";
-  return "ok";
+  return "idle";
+}
+function statePillHtml(st) {
+  const s = String(st || "idle").toLowerCase();
+  return `<span class="pill state ${statePillClass(s)}"><i class="dot ${stateDotClass(s)}"></i>${esc(stateLabel(s))}</span>`;
 }
 function fmtIdeaPx(n) {
   if (n == null || n === "" || !isFinite(Number(n))) return null;
@@ -225,25 +272,42 @@ function paperTableHtml(b) {
   }).join("");
   return `<div class="pos-wrap"><table class="pos"><thead><tr><th>Agent</th><th>Coin</th><th>Side</th><th>Entry</th><th>Now</th><th>P&amp;L</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
+function chatAgent(m) {
+  return String((m && (m.agent != null && m.agent !== "" ? m.agent : (m.name || m.bot || m.from))) || "").trim() || "desk";
+}
+function chatText(m) {
+  if (!m) return "";
+  if (m.text != null && String(m.text) !== "") return String(m.text);
+  if (m.message != null && String(m.message) !== "") return String(m.message);
+  if (m.body != null && String(m.body) !== "") return String(m.body);
+  return "";
+}
+function chatTime(m) {
+  const t = m && (m.created_at != null ? m.created_at : (m.ts != null ? m.ts : (m.t != null ? m.t : m.time)));
+  if (t == null || t === "") return null;
+  const n = Number(t);
+  if (!isFinite(n)) return null;
+  return n < 1e12 ? n : n / 1000;
+}
 function chatHtml(b) {
   const list = pickList(b, "chat");
   if (!list) return WAIT;
   if (!list.length) return `<div class="wait">No desk chat yet</div>`;
-  const items = list.slice(0, 40);
-  function chatName(m) { return m.name || m.agent || m.bot || m.from || "?"; }
-  return `<div class="chat-feed">${items.map((m, i) => {
-    const name = chatName(m);
-    const prev = i ? chatName(items[i - 1]) : "";
-    const same = prev && String(prev).toLowerCase() === String(name).toLowerCase();
-    const msg = m.message || m.text || m.body || "";
-    const t = m.created_at || m.ts || m.t || m.time;
-    const tShow = t != null ? hhmm(Number(t) < 1e12 ? Number(t) : Number(t) / 1000) : "";
-    const accent = catLook(name).accent;
+  const items = list.map((m) => ({ name: chatAgent(m), msg: chatText(m), t: chatTime(m) }))
+    .filter((m) => m.msg)
+    .sort((a, c) => (a.t || 0) - (c.t || 0));
+  const shown = items.slice(-40);
+  if (!shown.length) return `<div class="wait">No desk chat yet</div>`;
+  return `<div class="chat-feed">${shown.map((m, i) => {
+    const prev = i ? shown[i - 1].name : "";
+    const same = prev && String(prev).toLowerCase() === String(m.name).toLowerCase();
+    const accent = catLook(m.name).accent;
+    const tShow = m.t != null ? hhmm(m.t) : "";
     return `<div class="bubble-row${same ? " same" : ""}">
-      <div class="bubble-av">${same ? "" : catAvatar(name, 36)}</div>
+      <div class="bubble-av">${same ? "" : catAvatar(m.name, 36)}</div>
       <div class="bubble-col">
-        ${same ? "" : `<div class="bubble-name" style="color:${accent}">${esc(name)}</div>`}
-        <div class="bubble" style="border-left-color:${accent}">${esc(msg)}</div>
+        ${same ? "" : `<div class="bubble-name" style="color:${accent}">${esc(m.name)}</div>`}
+        <div class="bubble" style="border-left-color:${accent}">${esc(m.msg)}</div>
         ${tShow ? `<div class="bubble-time">${esc(tShow)}</div>` : ""}
       </div>
     </div>`;
@@ -251,14 +315,14 @@ function chatHtml(b) {
 }
 function agentExtrasHtml(a, st) {
   const role = a.role || ROLE_MAP[String(a.name || "").toLowerCase()] || "";
-  const state = a.state || (a.paused ? "off" : st) || "idle";
+  const state = agentRunState(a);
   const last = a.last || a.detail || agentLine(a);
   const conv = convPct(a.conviction);
   const convHtml = conv != null
     ? `<div class="conv"><div class="conv-meta"><span>Conviction</span><span>${conv}%</span></div><div class="conv-bar"><i style="width:${conv}%"></i></div></div>`
     : "";
   return `${role ? `<div class="agent-role">${esc(role)}</div>` : ""}
-    <div style="margin-top:8px"><span class="pill state ${statePillClass(state)}">${esc(state)}</span></div>
+    <div style="margin-top:8px">${statePillHtml(state)}</div>
     ${convHtml}
     ${last ? `<div class="agent-last">${esc(last)}</div>` : ""}`;
 }
@@ -270,6 +334,7 @@ const CAT_LOOKS = {
   analyst:  { fur:"#e09a4c", inner:"#ee8a7a", iris:"#f0b429", irisDark:"#a45e0c", stroke:"#8a4e18", brow:"think", mark:"tabby", accent:"#ff9f0a" },
   executor: { fur:"#2c2c30", inner:"#f0a8b8", iris:"#b6e04a", irisDark:"#4e7a14", stroke:"#121214", brow:"cool", mark:"muzzle", accent:"#00d35a" },
   risk:     { fur:"#8a4e2c", inner:"#e8b89a", iris:"#ef5a5a", irisDark:"#8a1e1e", stroke:"#5a2e18", brow:"worry", mark:"tips", accent:"#ff453a" },
+  desk:     { fur:"#c8c8d0", inner:"#d4b8c4", iris:"#8b8b92", irisDark:"#4a4a50", stroke:"#6e6e76", brow:"serious", mark:"", accent:"#8e8e93" },
 };
 function catLook(name) {
   const k = String(name || "").toLowerCase();
@@ -347,9 +412,8 @@ function botNetworkHtml(agents, b) {
   }).join("");
   const nodes = list.map((ag, i) => {
     const [x,y] = pts[i];
-    const st = (ag.state || agentState(ag, b) || "idle");
-    const cls = statePillClass(st);
-    const col = cls === "veto" ? "#ff453a" : cls === "debating" ? "#bf5af2" : (cls === "scanning" || cls === "analyzing") ? "#0a84ff" : "#00d35a";
+    const st = agentRunState(ag);
+    const col = st === "running" ? "#00d35a" : st === "idle" ? "#8e8e93" : st === "stopped" ? "#ff9f0a" : "#ff453a";
     const accent = catLook(ag.name).accent;
     return `<g>
       <circle cx="${x}" cy="${y}" r="24" fill="#111" stroke="${col}" stroke-width="2.4"/>
@@ -364,22 +428,24 @@ function botStatusCardsHtml(agents, b) {
   const list = agents || [];
   if (!list.length) return WAIT;
   return `<div class="bstats">${list.map((a) => {
-    const st = a.state || agentState(a, b) || "idle";
+    const st = agentRunState(a);
     const conv = convPct(a.conviction);
+    const detail = a.detail || agentLine(a) || "";
     return `<div class="bstat">
       ${catAvatar(a.name, 48)}
       <div class="who"><div class="nm">${esc(a.name)}</div>
         <div class="agent-role">${esc(a.role || ROLE_MAP[String(a.name||"").toLowerCase()] || "")}</div>
         ${conv != null ? `<div class="conv" style="margin-top:6px"><div class="conv-bar"><i style="width:${conv}%"></i></div></div>` : ""}
+        ${detail ? `<div class="agent-last">${esc(detail)}</div>` : ""}
       </div>
-      <span class="pill state ${statePillClass(st)}">${esc(st)}</span>
+      ${statePillHtml(st)}
     </div>`;
   }).join("")}</div>`;
 }
 
 /* ---------- views ---------- */
 function agentLine(a) { const d = (a.decisions || [])[0]; return d ? d.text : "no decisions yet"; }
-function agentState(a, b) { const fresh = a.last_beat && Date.now() / 1000 - a.last_beat < 120; return a.paused ? "off" : fresh ? "ok" : "down"; }
+function agentState(a, b) { return agentRunState(a); }
 function activityAgent(i) {
   if (i.agent || i.bot || i.name) return i.agent || i.bot || i.name;
   const t = String((i.title || "") + " " + (i.kind || "") + " " + (i.detail || "")).toLowerCase();
@@ -393,7 +459,7 @@ function actRow(i) {
   return `<div class="row" ${i.mint ? `data-coin="${esc(i.mint)}"` : ""}><div class="main">${icon}<div><div class="tt">${esc(i.title)}</div><div class="dd">${esc(i.detail || i.kind)}</div></div></div><div class="tm">${hhmm(i.created_at)}</div></div>`;
 }
 function renderHome() {
-  const b = B(), s = b.state, ch = b.chart || {}, run = s.agents.filter((a) => agentState(a, b) === "ok").length;
+  const b = B(), s = b.state, ch = b.chart || {}, runStates = (s.agents || []).map(agentRunState), run = runStates.filter((st) => st === "running").length, nIdle = runStates.filter((st) => st === "idle").length, nStopped = runStates.filter((st) => st === "stopped").length, nStale = runStates.filter((st) => st === "stale").length;
   const mult = ch.multiplier, el = $("#v-home");
   if (!$("#bal")) {
     el.innerHTML = `<div class="label">Portfolio</div>
@@ -422,8 +488,13 @@ function renderHome() {
   const open = (s.positions || []).filter((p) => p.status === "open");
   $("#poswrap").innerHTML = `<div class="sec"><h2>Paper positions</h2></div><div class="card">${paperTableHtml(b)}</div>` +
     (open.length ? `<div class="card list" style="margin-top:8px">${open.map((p) => `<div class="row" data-coin="${esc(p.mint)}"><div><div class="tt">${esc(p.name)}</div><div class="dd">${money(p.size_usd)} · stop ${px(p.stop)}${p.trail_active ? " · trail ON" : ""}</div></div><div class="${p.pnl_pct >= 0 ? "green" : "red"}">${pct(p.pnl_pct)}</div></div>`).join("")}</div>` : "");
-  $("#agh").innerHTML = `Agents · <span class="${run === 5 ? "green" : "orange"}">${run} running</span>`;
-  $("#car").innerHTML = s.agents.map((a) => `<div class="mini" data-go="agents"><div class="n">${catAvatar(a.name, 28)}<span class="dot ${agentState(a, b) === "ok" ? "" : agentState(a, b)}"></span>${a.name}</div><div class="c">${a.today}</div><div class="l">${esc(agentLine(a))}</div></div>`).join("");
+  const aghBits = [];
+  if (run) aghBits.push(run + " running");
+  if (nIdle) aghBits.push(nIdle + " idle");
+  if (nStopped) aghBits.push(nStopped + " stopped");
+  if (nStale) aghBits.push(nStale + " stale");
+  $("#agh").innerHTML = `Agents · <span class="${run ? "green" : "orange"}">${esc(aghBits.join(" · ") || "none")}</span>`;
+  $("#car").innerHTML = s.agents.map((a) => { const rst = agentRunState(a); return `<div class="mini" data-go="agents"><div class="n">${catAvatar(a.name, 28)}<span class="dot ${stateDotClass(rst)}"></span>${a.name}</div><div class="c">${a.today}</div><div class="l">${esc(a.detail || agentLine(a))}</div></div>`; }).join("");
   const items = (b.activity.items || []).slice(0, 5);
   $("#homeact").innerHTML = items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`;
   const age = Math.max(0, Math.round(Date.now() / 1000 - b.ts));
@@ -434,12 +505,13 @@ function decRow(d, a) { return `<div class="row" ${d.mint ? `data-${a === "audit
 function renderAgents() {
   const b = B(), s = b.state, hasPos = (s.positions || []).some((p) => p.status === "open");
   $("#v-agents").innerHTML = `<h1 class="t">Agents</h1>` + s.agents.map((a) => {
-    const dec = (b.decisions && b.decisions[a.name] || a.decisions || []).slice(0, 20), st = agentState(a, b), all = openAgents[a.name], rows = all ? dec : dec.slice(0, 5);
+    const dec = (b.decisions && b.decisions[a.name] || a.decisions || []).slice(0, 20), st = agentRunState(a), all = openAgents[a.name], rows = all ? dec : dec.slice(0, 5);
     const lock = a.name === "risk" && hasPos;
-    return `<div class="card"><div class="ac-h">${catAvatar(a.name, 36)}<span class="dot ${st === "ok" ? "" : st}"></span><div class="nm">${a.name}</div><div class="cnt">today <b style="color:#fff">${a.today}</b></div>
-      <button class="sw ${a.paused ? "" : "on"}" data-sw="${a.name}" ${lock ? "disabled" : ""} aria-label="${a.name} ${a.paused ? "paused" : "running"}"></button></div>
+    const noteLabel = st === "stopped" ? "Stopped" : st === "stale" ? "No heartbeat" : st === "idle" ? "Idle" : "Running";
+    return `<div class="card"><div class="ac-h">${catAvatar(a.name, 36)}<span class="dot ${stateDotClass(st)}"></span><div class="nm">${a.name}</div><div class="cnt">today <b style="color:#fff">${a.today}</b></div>
+      <button class="sw ${a.paused ? "" : "on"}" data-sw="${a.name}" ${lock ? "disabled" : ""} aria-label="${a.name} ${a.paused ? "paused" : st}"></button></div>
       ${agentExtrasHtml(a, st)}
-      <div class="note">${a.paused ? "Paused" : st === "down" ? "No heartbeat" : "Running"} · ${esc(a.detail || "")}${lock ? " · cannot be paused while a position is open" : ""}</div>
+      <div class="note">${noteLabel} · ${esc(a.detail || "")}${lock ? " · cannot be paused while a position is open" : ""}</div>
       <div class="list">${rows.length ? rows.map((d) => decRow(d, a.name)).join("") : `<div class="empty">No decisions yet</div>`}</div>
       ${dec.length > 5 ? `<button class="more" data-more="${a.name}">${all ? "Show less" : `Show all ${dec.length}`}</button>` : ""}</div>`;
   }).join("") + `<div class="note">Pause/resume cannot call the desk directly from this page. Tapping a switch opens Telegram ${esc(b.links.bot_name)} with the command.</div>`;

@@ -37,7 +37,10 @@ canvas.ch{width:100%;height:230px;display:block}
 .mini .n{font-weight:600;font-size:15px;text-transform:capitalize;display:flex;align-items:center;gap:7px}
 .mini .c{font-size:28px;font-weight:600;margin:6px 0 2px}.mini .l{font-size:12px;color:var(--muted);line-height:1.3;max-height:32px;overflow:hidden}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;flex:none}
-.dot.off{background:var(--orange)}.dot.down{background:var(--red)}
+.dot.off{background:var(--orange)}.dot.down{background:var(--red)}.dot.idle{background:#8e8e93}
+.dot.pulse{background:var(--green);box-shadow:0 0 0 0 rgba(0,211,90,.55);animation:desk-pulse 1.6s ease-out infinite}
+@keyframes desk-pulse{0%{box-shadow:0 0 0 0 rgba(0,211,90,.55)}70%{box-shadow:0 0 0 6px rgba(0,211,90,0)}100%{box-shadow:0 0 0 0 rgba(0,211,90,0)}}
+@media (prefers-reduced-motion:reduce){.dot.pulse{animation:none}}
 .card{background:var(--card);border-radius:16px;padding:14px 16px;margin-bottom:12px}
 .list .row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:11px 0;border-bottom:.5px solid var(--sep);cursor:pointer}
 .list .row:last-child{border-bottom:0}
@@ -126,12 +129,15 @@ background:rgba(28,28,30,.78);-webkit-backdrop-filter:blur(24px);backdrop-filter
 .idea-agree{margin-top:8px;font-size:12.5px;color:var(--muted);line-height:1.35}
 .idea-links{display:flex;gap:8px;margin-top:10px}
 .idea-links a{flex:1;text-align:center;text-decoration:none;color:var(--blue);background:rgba(10,132,255,.12);border-radius:10px;padding:10px 8px;font-size:13px;font-weight:600}
-.pill.state{text-transform:lowercase}
+.pill.state{text-transform:uppercase;letter-spacing:.05em;font-size:11px;height:22px;padding:0 8px;gap:6px}
+.pill.state .dot{width:7px;height:7px}
 .pill.scanning,.pill.analyzing{background:rgba(10,132,255,.18);color:var(--blue)}
 .pill.debating{background:rgba(191,90,242,.18);color:#bf5af2}
 .pill.consensus,.pill.idea{background:rgba(255,159,10,.18);color:var(--orange)}
-.pill.veto,.pill.down{background:rgba(255,69,58,.18);color:var(--red)}
-.pill.idle,.pill.ok{background:rgba(0,211,90,.15);color:var(--green)}
+.pill.running{background:rgba(0,211,90,.15);color:var(--green)}
+.pill.idle,.pill.ok{background:rgba(142,142,147,.18);color:#8e8e93}
+.pill.stopped{background:rgba(255,159,10,.16);color:var(--orange)}
+.pill.stale,.pill.veto,.pill.down{background:rgba(255,69,58,.18);color:var(--red)}
 .pill.long{background:rgba(0,211,90,.15);color:var(--green);text-transform:uppercase}
 .pill.short{background:rgba(255,69,58,.18);color:var(--red);text-transform:uppercase}
 .pill.risk{background:rgba(255,159,10,.16);color:var(--orange);text-transform:none}
@@ -166,6 +172,8 @@ table.pos tr:last-child td{border-bottom:0}
 .bstat{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:14px;padding:10px 12px}
 .bstat .who{flex:1;min-width:0}
 .bstat .who .nm{font-size:15px;font-weight:700;text-transform:capitalize;line-height:1.2}
+.bstat .agent-last{margin-top:4px;font-size:11.5px}
+.bstat .pill{flex:none;align-self:flex-start;margin-top:2px}
 .mini .n{gap:8px}
 .ac-h .cat{margin-right:2px}
 
