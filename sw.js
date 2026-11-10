@@ -1,5 +1,5 @@
 /* Service worker: network-first shell (so updates arrive), offline fallback. Data is cross-origin and never cached. */
-const CACHE = "desk-shell-v16";
+const CACHE = "desk-shell-v17";
 const SHELL = ["./", "app.css", "app.js", "manifest.json", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (event) => {

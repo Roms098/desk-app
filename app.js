@@ -647,6 +647,124 @@ function ticketOosLine(t) {
   if (line && extra.length) return line + " · " + extra.join(" · ");
   return line;
 }
+function ticketMint(t) { return t && (t.mint || t.token || "") || ""; }
+function ticketIntel(t, b, key, aliases) {
+  const keys = [key].concat(aliases || []);
+  for (const k of keys) {
+    if (t && t[k] != null && t[k] !== "") return t[k];
+  }
+  const mint = ticketMint(t);
+  if (!mint || !b) return null;
+  const maps = [];
+  for (const k of keys) {
+    if (b[k] != null) maps.push(b[k]);
+    if (b.state && b.state[k] != null) maps.push(b.state[k]);
+  }
+  for (const m of maps) {
+    if (m && typeof m === "object" && !Array.isArray(m) && m[mint] != null && m[mint] !== "") return m[mint];
+  }
+  return null;
+}
+function isSafeXUrl(u) {
+  try {
+    const url = new URL(String(u));
+    if (url.protocol !== "https:") return false;
+    const h = url.hostname.toLowerCase();
+    return h === "x.com" || h === "www.x.com" || h === "twitter.com" || h === "www.twitter.com";
+  } catch (e) { return false; }
+}
+function buzzWarnReason(z) {
+  if (numOk(z.rug_flags) && Number(z.rug_flags) > 0) return "rug";
+  if (numOk(z.shill_pct) && Number(z.shill_pct) > 0) return "shill " + Math.round(Number(z.shill_pct)) + "%";
+  if (numOk(z.dup_pct) && Number(z.dup_pct) > 0) return "dup " + Math.round(Number(z.dup_pct)) + "%";
+  return "";
+}
+function xBuzzHtml(z) {
+  if (z == null || z === "") return "";
+  if (typeof z !== "object" || Array.isArray(z)) return "";
+  const verdict = String(z.verdict || "none").toLowerCase();
+  const cls = verdict === "good" ? "good" : (verdict === "warn" ? "warn" : "thin");
+  let label = "X " + (verdict || "none");
+  if (verdict === "warn") {
+    const why = buzzWarnReason(z);
+    if (why) label += " · " + why;
+  }
+  const stale = z.stale === true || z.stale === 1 || String(z.stale).toLowerCase() === "true";
+  const urls = Array.isArray(z.top_post_urls) ? z.top_post_urls : [];
+  const links = urls.filter(isSafeXUrl).slice(0, 3).map((u) => {
+    let host = "x.com";
+    try { host = new URL(u).hostname.replace(/^www\./, ""); } catch (e) {}
+    const short = String(u).replace(/^https:\/\/(www\.)?(x\.com|twitter\.com)\//i, "").replace(/\/+$/, "");
+    const text = short ? host + "/" + short : host;
+    return `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(text)}</a>`;
+  }).join(" ");
+  return `<div class="tix-buzz"><span class="intel-chip ${cls}">${esc(label)}</span>${stale ? `<span class="intel-stale">stale</span>` : ""}${links ? `<div class="buzz-links">${links}</div>` : ""}</div>`;
+}
+function prettyVerdict(v) {
+  const s = String(v || "").trim();
+  if (!s) return "unknown";
+  return s.replace(/_/g, " ");
+}
+function valueIntelHtml(v) {
+  if (v == null || v === "") return "";
+  if (typeof v !== "object" || Array.isArray(v)) return "";
+  const comp = (v.components && typeof v.components === "object") ? v.components : {};
+  const nar = v.narrative || comp.narrative || {};
+  const dev = v.dev || comp.dev || {};
+  const cat = (nar.category || nar.kind || nar.type || "").trim() || "unknown";
+  const score = (v.value_score != null && v.value_score !== "") ? v.value_score : (v.score != null && v.score !== "" ? v.score : null);
+  const scoreShow = (score != null && isFinite(Number(score))) ? String(Math.round(Number(score))) : "unknown";
+  const devV = prettyVerdict(dev.verdict);
+  const devCls = /risky|serial.?rugg/i.test(dev.verdict || "") ? "risky" : "";
+  let notes = [];
+  if (Array.isArray(v.notes)) notes = notes.concat(v.notes);
+  if (Array.isArray(comp.notes)) notes = notes.concat(comp.notes);
+  notes = notes.map((n) => String(n == null ? "" : n).trim()).filter(Boolean);
+  const seen = new Set();
+  notes = notes.filter((n) => { if (seen.has(n)) return false; seen.add(n); return true; }).slice(0, 2);
+  const notesHtml = notes.length ? `<div class="val-notes">${notes.map((n) => esc(n)).join(" · ")}</div>` : "";
+  return `<div class="tix-val"><span class="val-score">${esc(scoreShow)}</span><span class="val-cat">${esc(cat)}</span><span class="val-dev ${devCls}">dev ${esc(devV)}</span>${notesHtml}</div>`;
+}
+function ticketAgeS(t) {
+  if (!t || t.created_at == null || t.created_at === "" || !isFinite(Number(t.created_at))) return Infinity;
+  let n = Number(t.created_at);
+  if (n > 1e12) n /= 1000;
+  return Date.now() / 1000 - n;
+}
+function fomoThesisHtml(th, t) {
+  if (th == null || th === "") {
+    return ticketAgeS(t) < 60 ? `<div class="tix-thesis loading">loading theses…</div>` : "";
+  }
+  if (typeof th === "string") {
+    const s = th.trim();
+    if (!s || s.toLowerCase() === "unknown") return `<div class="tix-thesis muted">theses unknown</div>`;
+    return `<div class="tix-thesis">${esc(s)}</div>`;
+  }
+  if (typeof th !== "object" || Array.isArray(th)) return "";
+  const count = numOk(th.count) ? Number(th.count) : null;
+  const bull = numOk(th.bullish) ? Number(th.bullish) : null;
+  const bear = numOk(th.bearish) ? Number(th.bearish) : null;
+  let head = count != null ? (count === 1 ? "1 thesis" : count + " theses") : "theses";
+  if (bull != null || bear != null) head += ` (${bull != null ? bull : "—"} bull / ${bear != null ? bear : "—"} bear)`;
+  const top = Array.isArray(th.top) ? th.top[0] : (th.top && typeof th.top === "object" ? th.top : null);
+  let quote = "";
+  if (top) {
+    const handle = String(top.handle || top.author || top.user || "").replace(/^@/, "");
+    const text = String(top.text || top.body || top.quote || "").trim();
+    const likes = numOk(top.likes) ? Number(top.likes) : (numOk(top.like_count) ? Number(top.like_count) : null);
+    const who = handle ? "@" + handle : "";
+    const likeBit = likes != null ? `${likes} like${likes === 1 ? "" : "s"}` : "";
+    quote = `<div class="thesis-quote">${text ? "“" + esc(text) + "”" : ""}${who || likeBit ? `<span class="dd">${esc([who, likeBit].filter(Boolean).join(" · "))}</span>` : ""}</div>`;
+  }
+  return `<div class="tix-thesis"><div class="thesis-head">${esc(head)}</div>${quote}</div>`;
+}
+function ticketIntelHtml(t, b) {
+  const buzz = xBuzzHtml(ticketIntel(t, b, "x_buzz", ["buzz"]));
+  const val = valueIntelHtml(ticketIntel(t, b, "value", ["coin_value"]));
+  const th = fomoThesisHtml(ticketIntel(t, b, "fomo_thesis", ["fomo_theses", "theses"]), t);
+  if (!buzz && !val && !th) return "";
+  return `<div class="tix-intel">${buzz}${val}${th}</div>`;
+}
 function ticketsHtml(b) {
   const list = pickList(b, "tickets");
   if (!list) return WAIT;
@@ -691,6 +809,7 @@ function ticketsHtml(b) {
       ${stageMsHtml(ticketStageMs(t, b))}
       ${oosLine ? `<div class="tix-oos">${esc(oosLine)}</div>` : ""}
       ${killShow ? `<div class="tix-kill">Kill: ${esc(killShow)}</div>` : ""}
+      ${ticketIntelHtml(t, b)}
       <div class="tix-chain">${chain.length ? chain.map((n) => catAvatar(n, 22)).join("") : `<span class="dd">chain —</span>`}</div>
       ${actions}
     </div>`;
