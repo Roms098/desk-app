@@ -7,7 +7,9 @@ const POLL_MS = 20000, STALE_S = 180;
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (t) => String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const GREEN = "#00d35a", RED = "#ff453a", ORANGE = "#ff9f0a", CYAN = "#64d2ff", BLUE = "#0a84ff", MUTED = "rgba(235,235,245,0.6)", SEP = "rgba(84,84,88,0.55)";
-const AGENTS = ["scanner", "auditor", "analyst", "executor", "risk"];
+const AGENTS = ["lead", "market", "research", "strategist", "risk", "executor", "reviewer"];
+const AGENT_ALIAS = { scanner: "market", auditor: "research", analyst: "strategist", desk: "lead", desk_lead: "lead" };
+const canon = (n) => { const k = String(n || "").trim().toLowerCase(); return AGENT_ALIAS[k] || k; };
 
 let RAW = null;            // last real bundle
 let TEST = { coins: {}, audits: {} };   // injected test data (never from the desk)
@@ -96,7 +98,14 @@ function drawHome() {
 /* ---------- optional desk extras (defensive; never invent numbers) ---------- */
 const WAIT = `<div class="wait">Waiting for data from your agents</div>`;
 const PIPE_STAGES = ["SCAN", "ANALYZE", "DEBATE", "CONSENSUS", "IDEA"];
-const ROLE_MAP = { scanner: "Scanner", auditor: "Auditor", analyst: "Analyst", executor: "Executor", risk: "Risk", desk: "Desk" };
+const FLOOR_STAGES = ["lead", "market", "research", "strategist", "risk", "executor", "reviewer"];
+const FLOOR_STAGE_LABEL = { lead: "LEAD", market: "MARKET", research: "RESEARCH", strategist: "STRATEGIST", risk: "RISK", executor: "EXECUTOR", reviewer: "REVIEWER" };
+const ROLE_MAP = { lead: "Desk Lead", market: "Market Analyst", research: "Research Analyst", strategist: "Strategist", risk: "Risk Manager", executor: "Execution Trader", reviewer: "Trade Reviewer" };
+const agentTitle = (n) => ROLE_MAP[canon(n)] || String(n || "?");
+function pickObj(b, key) { if (!b) return null; const v = b[key] != null ? b[key] : (b.state ? b.state[key] : null); return v && typeof v === "object" && !Array.isArray(v) ? v : null; }
+const numOk = (v) => v != null && v !== "" && isFinite(Number(v));
+const tgSafe = (s) => String(s == null ? "" : s).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 48);
+function tgStartUrl(b, payload) { return ((b.links && b.links.bot_url) || "https://t.me/Spearhedbot") + "?start=" + encodeURIComponent(payload); }
 function pickList(b, key) {
   if (!b) return null;
   if (Array.isArray(b[key])) return b[key];
@@ -124,6 +133,8 @@ function beatAge(a) {
   return Date.now() / 1000 - t;
 }
 function agentBusy(a) {
+  if (a && a.busy === true) return true;
+  if (a && a.busy === false) return false;
   const d = String((a && a.detail) || "");
   const num = (re) => { const m = d.match(re); return m ? Number(m[1]) : 0; };
   if (/\bauditing\b/i.test(d)) return true;
@@ -140,26 +151,35 @@ function agentRunState(a) {
   const age = beatAge(a);
   const st = String(a.status || "").toLowerCase();
   if (!isFinite(age) || age > STALE_S || st === "down" || st === "error" || st === "offline") return "stale";
+  const rs = String(a.run_state || a.runState || "").toLowerCase().trim();
+  if (rs === "busy" || rs === "running") return "running";
+  if (rs === "idle") return "idle";
+  if (rs === "waiting" || rs === "wait") return "waiting";
+  if (a.busy === true) return "running";
+  if (a.busy === false) return "idle";
   return agentBusy(a) ? "running" : "idle";
 }
 function stateLabel(st) {
   const s = String(st || "").toLowerCase();
-  if (s === "running") return "RUNNING";
+  if (s === "running" || s === "busy") return "RUNNING";
   if (s === "idle") return "IDLE";
+  if (s === "waiting" || s === "wait") return "WAITING";
   if (s === "stopped" || s === "paused" || s === "off") return "STOPPED";
   if (s === "stale" || s === "down") return "STALE";
   return String(st || "IDLE").toUpperCase();
 }
 function stateDotClass(st) {
   const s = String(st || "idle").toLowerCase();
-  if (s === "running") return "pulse";
+  if (s === "running" || s === "busy") return "pulse";
   if (s === "idle") return "idle";
+  if (s === "waiting" || s === "wait") return "wait";
   if (s === "stopped" || s === "paused" || s === "off") return "off";
   return "down";
 }
 function statePillClass(st) {
   const s = String(st || "idle").toLowerCase().replace(/\s+/g, "");
-  if (s === "running") return "running";
+  if (s === "running" || s === "busy") return "running";
+  if (s === "waiting" || s === "wait") return "waiting";
   if (s === "idle" || s === "ok" || s === "ready") return "idle";
   if (s === "stopped" || s === "paused" || s === "off") return "stopped";
   if (s === "stale" || s === "down" || s === "error" || s === "offline" || s.includes("veto")) return "stale";
@@ -189,19 +209,30 @@ function fmtUsdShort(n) {
   if (a >= 1e3) return "$" + (v / 1e3).toFixed(1) + "K";
   return "$" + v.toFixed(0);
 }
+function pipelineStages(stageRaw) {
+  const raw = String(stageRaw == null ? "" : stageRaw).trim();
+  const key = canon(raw);
+  const isFloor = FLOOR_STAGES.includes(key) || FLOOR_STAGES.includes(raw.toLowerCase())
+    || FLOOR_STAGES.some((id) => raw.toUpperCase() === (FLOOR_STAGE_LABEL[id] || "").toUpperCase() || raw.toUpperCase() === id.toUpperCase());
+  if (isFloor) {
+    const cur = FLOOR_STAGES.includes(key) ? key : (FLOOR_STAGES.find((id) => raw.toUpperCase() === (FLOOR_STAGE_LABEL[id] || "").toUpperCase()) || key);
+    return { names: FLOOR_STAGES.map((id) => FLOOR_STAGE_LABEL[id]), idx: FLOOR_STAGES.indexOf(cur) };
+  }
+  const s = raw.toUpperCase();
+  let idx = PIPE_STAGES.indexOf(s);
+  if (idx < 0 && isFinite(Number(stageRaw))) idx = Math.max(0, Math.min(PIPE_STAGES.length - 1, Number(stageRaw)));
+  if (idx < 0) idx = PIPE_STAGES.findIndex((p) => s.indexOf(p) >= 0);
+  return { names: PIPE_STAGES, idx };
+}
 function pipelineHtml(b) {
   const pipe = (b && b.pipeline) || (b && b.state && b.state.pipeline) || null;
   const stageRaw = pipe && (pipe.stage || pipe.current || pipe.step);
   if (!pipe || stageRaw == null || stageRaw === "") return WAIT;
-  let idx = -1;
-  const s = String(stageRaw).toUpperCase();
-  idx = PIPE_STAGES.indexOf(s);
-  if (idx < 0 && isFinite(Number(stageRaw))) idx = Math.max(0, Math.min(PIPE_STAGES.length - 1, Number(stageRaw)));
-  if (idx < 0) idx = PIPE_STAGES.findIndex((p) => s.indexOf(p) >= 0);
-  return `<div class="pipe">${PIPE_STAGES.map((name, i) => {
+  const { names, idx } = pipelineStages(stageRaw);
+  return `<div class="pipe">${names.map((name, i) => {
     const cls = i === idx ? "on" : (idx >= 0 && i < idx ? "done" : "");
-    const arrow = i < PIPE_STAGES.length - 1 ? `<span class="pipe-arrow">→</span>` : "";
-    return `<div class="pipe-stage ${cls}">${name}</div>${arrow}`;
+    const arrow = i < names.length - 1 ? `<span class="pipe-arrow">→</span>` : "";
+    return `<div class="pipe-stage ${cls}">${esc(name)}</div>${arrow}`;
   }).join("")}</div>`;
 }
 function ideasHtml(b) {
@@ -268,7 +299,7 @@ function paperTableHtml(b) {
       pnl = `<span class="${v >= 0 ? "green" : "red"}">${(v >= 0 ? "+" : "-") + money(Math.abs(v))}</span>`;
     }
     const mint = p.mint || "";
-    return `<tr ${mint ? `data-coin="${esc(mint)}"` : ""}><td>${agent}</td><td>${coin}</td><td>${esc(side)}</td><td>${esc(entry)}</td><td>${esc(now)}</td><td>${pnl}</td></tr>`;
+    return `<tr ${mint ? `data-coin="${esc(mint)}"` : ""}><td class="pos-ag">${agent}</td><td class="pos-coin">${coin}</td><td>${esc(side)}</td><td class="pos-px">${esc(entry)}</td><td class="pos-px">${esc(now)}</td><td class="pos-pnl">${pnl}</td></tr>`;
   }).join("");
   return `<div class="pos-wrap"><table class="pos"><thead><tr><th>Agent</th><th>Coin</th><th>Side</th><th>Entry</th><th>Now</th><th>P&amp;L</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
@@ -292,21 +323,23 @@ function chatTime(m) {
 function chatHtml(b) {
   const list = pickList(b, "chat");
   if (!list) return WAIT;
-  if (!list.length) return `<div class="wait">No desk chat yet</div>`;
-  const items = list.map((m) => ({ name: chatAgent(m), msg: chatText(m), t: chatTime(m) }))
+  if (!list.length) return `<div class="wait">No floor chat yet</div>`;
+  const items = list.map((m) => ({ name: chatAgent(m), msg: chatText(m), t: chatTime(m), ticket: m.ticket_id || m.ticket || m.tid || "" }))
     .filter((m) => m.msg)
     .sort((a, c) => (a.t || 0) - (c.t || 0));
   const shown = items.slice(-40);
-  if (!shown.length) return `<div class="wait">No desk chat yet</div>`;
+  if (!shown.length) return `<div class="wait">No floor chat yet</div>`;
   return `<div class="chat-feed">${shown.map((m, i) => {
     const prev = i ? shown[i - 1].name : "";
-    const same = prev && String(prev).toLowerCase() === String(m.name).toLowerCase();
+    const same = prev && canon(prev) === canon(m.name);
     const accent = catLook(m.name).accent;
     const tShow = m.t != null ? hhmm(m.t) : "";
+    const chip = m.ticket ? `<span class="tix-chip">#${esc(m.ticket)}</span>` : "";
     return `<div class="bubble-row${same ? " same" : ""}">
       <div class="bubble-av">${same ? "" : catAvatar(m.name, 36)}</div>
       <div class="bubble-col">
-        ${same ? "" : `<div class="bubble-name" style="color:${accent}">${esc(m.name)}</div>`}
+        ${same ? "" : `<div class="bubble-name" style="color:${accent}">${esc(agentTitle(m.name))}${chip}</div>`}
+        ${same && chip ? `<div class="bubble-name">${chip}</div>` : ""}
         <div class="bubble" style="border-left-color:${accent}">${esc(m.msg)}</div>
         ${tShow ? `<div class="bubble-time">${esc(tShow)}</div>` : ""}
       </div>
@@ -314,7 +347,7 @@ function chatHtml(b) {
   }).join("")}</div>`;
 }
 function agentExtrasHtml(a, st) {
-  const role = a.role || ROLE_MAP[String(a.name || "").toLowerCase()] || "";
+  const role = a.role || agentTitle(a.name) || "";
   const state = agentRunState(a);
   const last = a.last || a.detail || agentLine(a);
   const conv = convPct(a.conviction);
@@ -329,15 +362,16 @@ function agentExtrasHtml(a, st) {
 
 
 const CAT_LOOKS = {
-  scanner:  { fur:"#f3c48a", inner:"#ff9db4", iris:"#4d8dff", irisDark:"#1e4db5", stroke:"#b67a3c", brow:"curious", mark:"tuft", accent:"#0a84ff" },
-  auditor:  { fur:"#eef2f7", inner:"#f5b8c6", iris:"#3ad3e0", irisDark:"#0e7a86", stroke:"#8b95a3", brow:"serious", mark:"tips", accent:"#64d2ff" },
-  analyst:  { fur:"#e09a4c", inner:"#ee8a7a", iris:"#f0b429", irisDark:"#a45e0c", stroke:"#8a4e18", brow:"think", mark:"tabby", accent:"#ff9f0a" },
+  lead:     { fur:"#f4f0e6", inner:"#f2b2c2", iris:"#a46bff", irisDark:"#5a2eb0", stroke:"#8a7f6a", brow:"cool", mark:"crown", accent:"#bf5af2" },
+  market:   { fur:"#f3c48a", inner:"#ff9db4", iris:"#4d8dff", irisDark:"#1e4db5", stroke:"#b67a3c", brow:"curious", mark:"tuft", accent:"#0a84ff" },
+  research: { fur:"#eef2f7", inner:"#f5b8c6", iris:"#3ad3e0", irisDark:"#0e7a86", stroke:"#8b95a3", brow:"serious", mark:"tips", accent:"#64d2ff" },
+  strategist:{ fur:"#e09a4c", inner:"#ee8a7a", iris:"#f0b429", irisDark:"#a45e0c", stroke:"#8a4e18", brow:"think", mark:"tabby", accent:"#ff9f0a" },
   executor: { fur:"#2c2c30", inner:"#f0a8b8", iris:"#b6e04a", irisDark:"#4e7a14", stroke:"#121214", brow:"cool", mark:"muzzle", accent:"#00d35a" },
   risk:     { fur:"#8a4e2c", inner:"#e8b89a", iris:"#ef5a5a", irisDark:"#8a1e1e", stroke:"#5a2e18", brow:"worry", mark:"tips", accent:"#ff453a" },
-  desk:     { fur:"#c8c8d0", inner:"#d4b8c4", iris:"#8b8b92", irisDark:"#4a4a50", stroke:"#6e6e76", brow:"serious", mark:"", accent:"#8e8e93" },
+  reviewer: { fur:"#9aa3ad", inner:"#efb6c4", iris:"#59c18c", irisDark:"#1f6e45", stroke:"#5b636c", brow:"serious", mark:"", acc:"glasses", accent:"#30d158" },
 };
 function catLook(name) {
-  const k = String(name || "").toLowerCase();
+  const k = canon(name);
   if (CAT_LOOKS[k]) return CAT_LOOKS[k];
   const keys = Object.keys(CAT_LOOKS);
   let h = 0; for (let i = 0; i < k.length; i++) h = (h + k.charCodeAt(i) * 17) % keys.length;
@@ -355,6 +389,7 @@ function catBrows(kind, color) {
 function catMarks(kind, L) {
   if (kind === "tabby") return `<path d="M32 16 L32 24" stroke="${L.stroke}" stroke-width="2.2" stroke-linecap="round"/><path d="M27 17 L28.2 24" stroke="${L.stroke}" stroke-width="1.8" stroke-linecap="round"/><path d="M37 17 L35.8 24" stroke="${L.stroke}" stroke-width="1.8" stroke-linecap="round"/>`;
   if (kind === "tuft") return `<path d="M32 12 Q34 8 31 6 Q30 14 32 16" fill="${L.fur}" stroke="${L.stroke}" stroke-width=".8"/>`;
+  if (kind === "crown") return `<path d="M22 15 L24 6 L28.5 11 L32 4 L35.5 11 L40 6 L42 15 Z" fill="#ffd60a" stroke="#b8860b" stroke-width=".9"/><circle cx="32" cy="9" r="1.4" fill="#ff453a"/>`;
   if (kind === "muzzle") return `<ellipse cx="32" cy="44" rx="9" ry="6.5" fill="#4a4a50"/>`;
   if (kind === "tips") return `<path d="M14 16 L11 7 L18 12 Z" fill="${L.stroke}" opacity=".55"/><path d="M50 16 L53 7 L46 12 Z" fill="${L.stroke}" opacity=".55"/>`;
   return "";
@@ -371,7 +406,7 @@ function catEye(cx, L) {
 function catSvgInner(name) {
   const L = catLook(name);
   const k = String(name || "").toLowerCase();
-  const initial = esc(String(name || "?").trim().charAt(0).toUpperCase() || "?");
+  const initial = esc((agentTitle(name).trim().charAt(0).toUpperCase()) || "?");
   return `
     <circle cx="32" cy="36" r="22" fill="${L.fur}"/>
     <path d="M13 30 Q8 5 26 20 Z" fill="${L.fur}"/>
@@ -382,6 +417,7 @@ function catSvgInner(name) {
     ${catBrows(L.brow, L.stroke)}
     ${catEye(22.2, L)}
     ${catEye(41.8, L)}
+    ${L.acc === "glasses" ? `<g fill="none" stroke="#1c1c1e" stroke-width="1.8"><circle cx="22.2" cy="33" r="8.6"/><circle cx="41.8" cy="33" r="8.6"/><path d="M30.8 32 Q32 30.6 33.2 32"/></g><rect x="42" y="46" width="13" height="15" rx="1.5" fill="#fff6d5" stroke="#8a6d1f" stroke-width=".9"/><path d="M44.5 50 H52.5 M44.5 53 H52.5 M44.5 56 H50" stroke="#8a6d1f" stroke-width=".8"/>` : ""}
     <ellipse cx="16.5" cy="41.5" rx="4.2" ry="2.3" fill="#ff8aa8" opacity=".62"/>
     <ellipse cx="47.5" cy="41.5" rx="4.2" ry="2.3" fill="#ff8aa8" opacity=".62"/>
     <path d="M29 45.2 Q32 48 35 45.2" fill="none" stroke="${L.stroke}" stroke-width="1.3" stroke-linecap="round"/>
@@ -399,42 +435,62 @@ function catAvatar(name, size) {
     </svg>
   </span>`;
 }
+function orderAgents(agents) {
+  const list = (agents || []).map((a) => ({ ...a, _id: canon(a.name) }));
+  const rank = (id) => { const i = AGENTS.indexOf(id); return i < 0 ? 99 : i; };
+  list.sort((a, b) => rank(a._id) - rank(b._id));
+  return list;
+}
 function botNetworkHtml(agents, b) {
-  const list = (agents || []).slice(0, 5);
+  const list = orderAgents(agents);
   if (!list.length) return WAIT;
-  const W = 360, H = 176;
-  const pts = [[180, 34], [64, 76], [296, 76], [96, 144], [264, 144]];
-  const links = [[0,1],[0,2],[1,3],[2,4],[1,2],[3,4],[0,3],[0,4]];
-  const lines = links.map(([i,j]) => {
-    if (i >= list.length || j >= list.length) return "";
-    const a = pts[i], c = pts[j];
-    return `<path d="M${a[0]} ${a[1]} Q${(a[0]+c[0])/2} ${(a[1]+c[1])/2 - 8} ${c[0]} ${c[1]}" fill="none" stroke="rgba(10,132,255,.45)" stroke-width="1.4"/>`;
+  const W = 360, H = 230;
+  const cx = 180, cy = 108, R = 78;
+  const center = list.find((a) => a._id === "lead");
+  const ring = list.filter((a) => a._id !== "lead");
+  const pos = new Map();
+  if (center) pos.set(center, [cx, cy]);
+  ring.forEach((ag, i) => {
+    const n = Math.max(ring.length, 1);
+    const ang = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+    pos.set(ag, [cx + R * Math.cos(ang), cy + R * Math.sin(ang)]);
+  });
+  const nodes = list;
+  const pairs = [];
+  if (center) ring.forEach((ag) => pairs.push([center, ag]));
+  for (let i = 0; i < ring.length; i++) pairs.push([ring[i], ring[(i + 1) % ring.length]]);
+  const lines = pairs.map(([a, c]) => {
+    const p = pos.get(a), q = pos.get(c);
+    return `<path d="M${p[0]} ${p[1]} Q${(p[0]+q[0])/2} ${(p[1]+q[1])/2 - 6} ${q[0]} ${q[1]}" fill="none" stroke="rgba(191,90,242,.4)" stroke-width="1.3"/>`;
   }).join("");
-  const nodes = list.map((ag, i) => {
-    const [x,y] = pts[i];
+  const dots = nodes.map((ag) => {
+    const [x, y] = pos.get(ag);
     const st = agentRunState(ag);
-    const col = st === "running" ? "#00d35a" : st === "idle" ? "#8e8e93" : st === "stopped" ? "#ff9f0a" : "#ff453a";
+    const col = st === "running" ? "#00d35a" : st === "idle" ? "#8e8e93" : (st === "stopped" || st === "waiting") ? "#ff9f0a" : "#ff453a";
     const accent = catLook(ag.name).accent;
+    const r = ag._id === "lead" ? 26 : 22;
+    const lab = agentTitle(ag.name).replace(" Analyst", "").replace(" Manager", "").replace(" Trader", "").replace("Desk ", "");
     return `<g>
-      <circle cx="${x}" cy="${y}" r="24" fill="#111" stroke="${col}" stroke-width="2.4"/>
-      <circle cx="${x}" cy="${y}" r="21.5" fill="none" stroke="${accent}" stroke-width="1.6"/>
-      <g transform="translate(${x-18},${y-18}) scale(${36/64})">${catSvgInner(ag.name)}</g>
-      <text x="${x}" y="${y+36}" text-anchor="middle" fill="rgba(235,235,245,.75)" font-size="9" font-family="Roboto,system-ui,sans-serif">${esc(ag.name)}</text>
+      <circle cx="${x}" cy="${y}" r="${r}" fill="#111" stroke="${col}" stroke-width="2.4"/>
+      <circle cx="${x}" cy="${y}" r="${r - 2.4}" fill="none" stroke="${accent}" stroke-width="1.5"/>
+      <g transform="translate(${x - r * 0.72},${y - r * 0.72}) scale(${(r * 1.44) / 64})">${catSvgInner(ag.name)}</g>
+      <text x="${x}" y="${y + r + 11}" text-anchor="middle" fill="rgba(235,235,245,.8)" font-size="8.5" font-family="Roboto,system-ui,sans-serif">${esc(lab)}</text>
     </g>`;
   }).join("");
-  return `<div class="net-card"><svg class="net-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Bot network">${lines}${nodes}</svg></div>`;
+  return `<div class="net-card"><svg class="net-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Trading floor network">${lines}${dots}</svg></div>`;
 }
 function botStatusCardsHtml(agents, b) {
-  const list = agents || [];
+  const list = orderAgents(agents);
   if (!list.length) return WAIT;
   return `<div class="bstats">${list.map((a) => {
     const st = agentRunState(a);
     const conv = convPct(a.conviction);
     const detail = a.detail || agentLine(a) || "";
+    const title = a.role || agentTitle(a.name);
     return `<div class="bstat">
       ${catAvatar(a.name, 48)}
-      <div class="who"><div class="nm">${esc(a.name)}</div>
-        <div class="agent-role">${esc(a.role || ROLE_MAP[String(a.name||"").toLowerCase()] || "")}</div>
+      <div class="who"><div class="nm">${esc(title)}</div>
+        <div class="agent-role">${esc(a._id || canon(a.name))}</div>
         ${conv != null ? `<div class="conv" style="margin-top:6px"><div class="conv-bar"><i style="width:${conv}%"></i></div></div>` : ""}
         ${detail ? `<div class="agent-last">${esc(detail)}</div>` : ""}
       </div>
@@ -450,6 +506,7 @@ function activityAgent(i) {
   if (i.agent || i.bot || i.name) return i.agent || i.bot || i.name;
   const t = String((i.title || "") + " " + (i.kind || "") + " " + (i.detail || "")).toLowerCase();
   for (const n of AGENTS) if (t.includes(n)) return n;
+  for (const [oldId, neu] of Object.entries(AGENT_ALIAS)) if (t.includes(oldId)) return neu;
   return null;
 }
 function actRow(i) {
@@ -458,16 +515,204 @@ function actRow(i) {
   const icon = ag ? catAvatar(ag, 28) : `<div class="ic" style="background:${col}"></div>`;
   return `<div class="row" ${i.mint ? `data-coin="${esc(i.mint)}"` : ""}><div class="main">${icon}<div><div class="tt">${esc(i.title)}</div><div class="dd">${esc(i.detail || i.kind)}</div></div></div><div class="tm">${hhmm(i.created_at)}</div></div>`;
 }
+function fmtPctNum(v) {
+  if (!numOk(v)) return "—";
+  const n = Number(v);
+  const d = Math.abs(n) < 0.1 && n !== 0 ? 2 : 1;
+  return n.toFixed(d).replace(/\.0$/, "") + "%";
+}
+function asPctPoints(v) {
+  if (!numOk(v)) return null;
+  return Number(v);
+}
+function limitsHtml(b) {
+  const L = pickObj(b, "limits");
+  if (!L) return WAIT;
+  const exp = asPctPoints(L.exposure_pct);
+  const expMax = asPctPoints(L.max_exposure_pct);
+  const pnl = asPctPoints(L.day_pnl_pct);
+  const loss = asPctPoints(L.daily_loss_pct);
+  const risk = asPctPoints(L.risk_per_trade_pct);
+  const halted = L.halted === true || L.halted === 1 || String(L.halted).toLowerCase() === "true";
+  function bar(label, value, cap, flip) {
+    const hasV = value != null, hasC = cap != null && cap !== 0;
+    const ratio = hasV && hasC ? Math.min(1, Math.max(0, Math.abs(value) / Math.abs(cap))) : (hasV ? 0 : 0);
+    const over = hasV && hasC && ((flip && value <= -Math.abs(cap)) || (!flip && Math.abs(value) >= Math.abs(cap)));
+    const cls = !hasV ? "" : (over ? "over" : (flip && value < 0 ? "down" : ""));
+    const capLabel = hasC ? (flip ? "vs −" + fmtPctNum(Math.abs(cap)).replace("%","") + "%" : "vs " + fmtPctNum(cap)) : "";
+    return `<div class="lim-row">
+      <div class="lim-meta"><span>${esc(label)}</span><b>${hasV ? esc(fmtPctNum(value)) : "—"}${capLabel ? ` <span class="lim-cap">${esc(capLabel)}</span>` : ""}</b></div>
+      <div class="lim-bar"><i class="${cls}" style="width:${hasV && hasC ? Math.round(ratio * 100) : 0}%"></i></div>
+    </div>`;
+  }
+  return `${halted ? `<div class="halted">HALTED</div>` : ""}
+    <div class="lims">
+      ${bar("Exposure", exp, expMax, false)}
+      ${bar("Day P&L", pnl, loss, true)}
+      ${risk != null ? `<div class="lim-note">Risk per trade ${esc(fmtPctNum(risk))}</div>` : ""}
+    </div>`;
+}
+function isAutoTicket(t) {
+  return t && (t.auto === true || t.auto === 1 || String(t.auto).toLowerCase() === "true");
+}
+function ticketStatusChip(t) {
+  const st = String((t && t.status) || "open").toLowerCase();
+  return `<span class="tix-chip ${esc(st)}">${esc(st.toUpperCase())}</span>`;
+}
+function ticketAutoTag(t) {
+  return isAutoTicket(t) ? `<span class="tix-chip auto sm">AUTO</span>` : "";
+}
+function fmtMs(ms) {
+  const n = Number(ms);
+  if (!isFinite(n)) return "—";
+  const sec = n / 1000;
+  return (sec >= 10 ? sec.toFixed(0) : sec.toFixed(1)) + "s";
+}
+function stageMsHtml(sm) {
+  if (!sm || typeof sm !== "object" || Array.isArray(sm)) return "";
+  const keys = Object.keys(sm);
+  if (!keys.length) return "";
+  return `<div class="tix-stages">${keys.map((k) => {
+    const lab = FLOOR_STAGE_LABEL[canon(k)] || String(k).toUpperCase();
+    return `<span><i>${esc(lab)}</i> ${esc(fmtMs(sm[k]))}</span>`;
+  }).join("")}</div>`;
+}
+function ticketsHtml(b) {
+  const list = pickList(b, "tickets");
+  if (!list) return WAIT;
+  if (!list.length) return `<div class="wait">No tickets yet</div>`;
+  return `<div class="tix-list">${list.map((t) => {
+    const id = t.id != null ? String(t.id) : "";
+    const st = String(t.status || "").toLowerCase();
+    const auto = isAutoTicket(t);
+    const chain = Array.isArray(t.chain) ? t.chain : [];
+    const mint = t.mint || "";
+    const dir = String(t.direction || t.side || "—").toUpperCase();
+    const size = numOk(t.size_usd) ? money(Number(t.size_usd)) : "—";
+    const entry = t.entry != null ? px(t.entry) : "—";
+    const inv = t.invalidation != null ? px(t.invalidation) : "—";
+    const when = t.created_at != null ? hhmm(Number(t.created_at) < 1e12 ? Number(t.created_at) : Number(t.created_at) / 1000) : "";
+    const pending = st === "pending" && !auto;
+    const safe = tgSafe(id);
+    const bot = (b.links && b.links.bot_url) || "https://t.me/Spearhedbot";
+    const actions = pending && safe ? `<div class="tix-actions">
+      <a class="tix-btn go" href="${esc(bot + "?start=" + encodeURIComponent("approve_" + safe))}" target="_blank" rel="noopener">Approve #${esc(id)}</a>
+      <a class="tix-btn no" href="${esc(bot + "?start=" + encodeURIComponent("reject_" + safe))}" target="_blank" rel="noopener">Reject #${esc(id)}</a>
+    </div>` : "";
+    let latency = "";
+    if (t.latency_ms != null && t.latency_ms !== "" && isFinite(Number(t.latency_ms))) {
+      const sec = Number(t.latency_ms) / 1000;
+      latency = `flag→fill ${sec >= 10 ? sec.toFixed(0) : sec.toFixed(1)}s`;
+    }
+    const killed = st === "killed" || st === "kill" || st === "veto";
+    const killShow = killed && t.kill_reason ? String(t.kill_reason) : "";
+    return `<div class="tix">
+      <div class="tix-top"><div class="tix-id">#${esc(id || "—")}</div><div class="tix-flags">${ticketStatusChip(t)}${ticketAutoTag(t)}</div></div>
+      <div class="tix-asset">${esc(t.asset || t.symbol || t.name || "—")} <span class="tix-dir">${esc(dir)}</span></div>
+      ${mint ? `<button type="button" class="idea-mint" data-copy="${esc(mint)}">${esc(shortMint(mint))} · tap to copy</button>` : `<div class="dd">mint —</div>`}
+      <div class="tix-grid">
+        <div><label>Size</label><b>${esc(size)}</b></div>
+        <div><label>Entry</label><b>${esc(entry)}</b></div>
+        <div><label>Invalidation</label><b>${esc(inv)}</b></div>
+        <div><label>Opened</label><b>${esc(when || "—")}</b></div>
+      </div>
+      ${latency ? `<div class="tix-lat">${esc(latency)}</div>` : ""}
+      ${stageMsHtml(t.stage_ms || t.stageMs)}
+      ${killShow ? `<div class="tix-kill">Kill: ${esc(killShow)}</div>` : ""}
+      <div class="tix-chain">${chain.length ? chain.map((n) => catAvatar(n, 22)).join("") : `<span class="dd">chain —</span>`}</div>
+      ${actions}
+    </div>`;
+  }).join("")}</div>`;
+}
+function journalHtml(b) {
+  const list = pickList(b, "journal");
+  if (!list) return WAIT;
+  if (!list.length) return `<div class="wait">No journal entries yet</div>`;
+  return `<div class="jnl-list">${list.map((j) => {
+    const id = j.ticket_id || j.id || j.ticket || "";
+    const pnlV = j.pnl_usd != null ? Number(j.pnl_usd) : (j.pnl != null ? Number(j.pnl) : null);
+    const pnlP = j.pnl_pct != null ? Number(j.pnl_pct) : null;
+    let pnl = "—", cls = "";
+    if (numOk(pnlV)) { cls = Number(pnlV) >= 0 ? "green" : "red"; pnl = (Number(pnlV) >= 0 ? "+" : "−") + money(Math.abs(Number(pnlV))); }
+    else if (numOk(pnlP)) { cls = Number(pnlP) >= 0 ? "green" : "red"; pnl = pct(Number(pnlP)); }
+    const note = j.post_mortem || j.notes || j.text || j.detail || "";
+    const when = j.created_at != null ? hhmm(Number(j.created_at) < 1e12 ? Number(j.created_at) : Number(j.created_at) / 1000) : "";
+    return `<div class="jnl ${cls === "red" ? "loss" : ""}">
+      <div class="tix-top"><div class="tix-id">#${esc(id || "—")}</div><span class="${cls}">${pnl}</span></div>
+      <div class="tix-asset">${esc(j.asset || j.symbol || j.name || "—")}${when ? ` <span class="dd">${esc(when)}</span>` : ""}</div>
+      ${note ? `<div class="jnl-note">${esc(note)}</div>` : `<div class="dd">No post-mortem</div>`}
+    </div>`;
+  }).join("")}</div>`;
+}
+function weeklyHtml(b) {
+  const w = (b && (b.weekly_report != null ? b.weekly_report : (b.state && b.state.weekly_report)));
+  if (w == null || w === "") return WAIT;
+  if (typeof w === "string") return `<div class="weekly">${esc(w)}</div>`;
+  if (typeof w !== "object") return WAIT;
+  const pnlV = w.pnl_usd != null ? Number(w.pnl_usd) : (w.pnl != null ? Number(w.pnl) : null);
+  const pnlP = w.pnl_pct != null ? Number(w.pnl_pct) : (w.day_pnl_pct != null ? Number(w.day_pnl_pct) : null);
+  let pnl = "";
+  if (numOk(pnlV)) pnl = `<div class="${Number(pnlV)>=0?"green":"red"}">${Number(pnlV)>=0?"+":"−"}${money(Math.abs(Number(pnlV)))}</div>`;
+  else if (numOk(pnlP)) pnl = `<div class="${Number(pnlP)>=0?"green":"red"}">${pct(Number(pnlP))}</div>`;
+  const text = w.text || w.summary || w.body || w.notes || "";
+  const title = w.title || w.week || w.period || "This week";
+  const wins = w.wins, losses = w.losses, n = w.tickets || w.count;
+  const meta = [wins != null ? wins + " wins" : null, losses != null ? losses + " losses" : null, n != null ? n + " tickets" : null].filter(Boolean).join(" · ");
+  return `<div class="weekly">
+    <div class="tix-top"><div class="tix-asset">${esc(title)}</div>${pnl}</div>
+    ${meta ? `<div class="dd">${esc(meta)}</div>` : ""}
+    ${text ? `<div class="jnl-note">${esc(text)}</div>` : ""}
+  </div>`;
+}
+
+function funnelHtml(b) {
+  const f = pickObj(b, "funnel");
+  if (!f) return WAIT;
+  const rawCounts = (f.counts && typeof f.counts === "object") ? f.counts
+    : ((f.stages && typeof f.stages === "object" && !Array.isArray(f.stages)) ? f.stages : null);
+  const counts = {};
+  if (rawCounts) {
+    Object.keys(rawCounts).forEach((k) => { if (numOk(rawCounts[k])) counts[k] = Number(rawCounts[k]); });
+  } else {
+    Object.keys(f).forEach((k) => {
+      if (k === "kills" || k === "reasons") return;
+      if (numOk(f[k])) counts[k] = Number(f[k]);
+    });
+  }
+  const kills = Array.isArray(f.kills) ? f.kills : [];
+  const reasonMap = new Map();
+  kills.forEach((k) => {
+    const reason = String((k && (k.reason || k.kill_reason || k.why)) || "").trim() || "unspecified";
+    const rec = reasonMap.get(reason) || { reason, n: 0, stage: (k && k.stage) || "", asset: (k && (k.asset || k.symbol || shortMint(k.mint))) || "" };
+    rec.n += 1;
+    reasonMap.set(reason, rec);
+  });
+  const top = [...reasonMap.values()].sort((a, c) => c.n - a.n).slice(0, 5);
+  const stageKeys = Object.keys(counts);
+  const countHtml = stageKeys.length
+    ? `<div class="fun-stages">${stageKeys.map((k) => {
+        const lab = FLOOR_STAGE_LABEL[canon(k)] || String(k).toUpperCase();
+        return `<span class="fun-chip"><i>${esc(lab)}</i> ${esc(String(counts[k]))}</span>`;
+      }).join("")}</div>`
+    : "";
+  const killHtml = top.length
+    ? `<div class="fun-kills">${top.map((r) => `<div class="fun-kill"><b>×${r.n}</b> ${esc(r.reason)}${r.stage ? ` <span class="dd">${esc(FLOOR_STAGE_LABEL[canon(r.stage)] || r.stage)}</span>` : ""}</div>`).join("")}</div>`
+    : (kills.length ? "" : `<div class="dd">No kills recorded</div>`);
+  if (!countHtml && !top.length && !kills.length) return `<div class="wait">No funnel data yet</div>`;
+  return `<div class="funnel">${countHtml}${killHtml}</div>`;
+}
 function renderHome() {
-  const b = B(), s = b.state, ch = b.chart || {}, runStates = (s.agents || []).map(agentRunState), run = runStates.filter((st) => st === "running").length, nIdle = runStates.filter((st) => st === "idle").length, nStopped = runStates.filter((st) => st === "stopped").length, nStale = runStates.filter((st) => st === "stale").length;
+  const b = B(), s = b.state, ch = b.chart || {}, runStates = (s.agents || []).map(agentRunState), run = runStates.filter((st) => st === "running").length, nIdle = runStates.filter((st) => st === "idle").length, nWaiting = runStates.filter((st) => st === "waiting").length, nStopped = runStates.filter((st) => st === "stopped").length, nStale = runStates.filter((st) => st === "stale").length;
   const mult = ch.multiplier, el = $("#v-home");
   if (!$("#bal")) {
     el.innerHTML = `<div class="label">Portfolio</div>
       <div class="hero"><div class="bal" id="bal"></div><span class="pill paper" id="paperpill"></span></div>
       <div class="sub"><span id="pnl"></span><span class="pill mult" id="mult"></span></div>
+      <div class="sec" style="margin-top:16px"><h2>Limits</h2></div><div class="card" id="limwrap"></div>
+      <div class="sec"><h2>Tickets</h2></div><div id="tixwrap"></div>
       <div class="card" style="margin-top:8px"><div class="sec" style="margin:0 0 8px"><h2 style="font-size:16px">Desk cycle</h2></div><div id="pipeline"></div></div>
-      <div class="sec" id="desknet"><h2>Bot network</h2></div><div class="card" id="netwrap"></div>
-      <div class="sec"><h2>Bot status</h2></div><div id="bstatwrap"></div>
+      <div class="sec" id="desknet"><h2>Trading floor</h2></div><div class="card" id="netwrap"></div>
+      <div class="sec"><h2>Floor status</h2></div><div id="bstatwrap"></div>
       <div class="chartwrap"><canvas class="ch" id="homechart"></canvas></div>
       <div class="ranges" id="ranges">${Object.keys(RANGE_S).map((r) => `<button data-r="${r}">${r}</button>`).join("")}</div>
       <div class="sec"><h2>Ideas for you</h2></div><div class="card" id="ideaswrap"></div>
@@ -476,11 +721,13 @@ function renderHome() {
       <div class="sec"><h2>Activity</h2><button data-go="activity">See all</button></div><div class="card list" id="homeact"></div>
       <div class="statusline" id="statusline"></div>`;
   }
-  odo($("#bal"), money(s.stack_usd + (s.positions || []).filter((p) => p.status === "open").reduce((a, p) => a + p.size_usd * (p.pnl_pct || 0) / 100, 0)));
+  odo($("#bal"), money((Number(s.stack_usd) || 0) + (s.positions || []).filter((p) => p.status === "open").reduce((a, p) => a + (Number(p.size_usd) || 0) * (Number(p.pnl_pct) || 0) / 100, 0)));
   const pl = $("#paperpill"); pl.textContent = s.mode; pl.className = "pill " + (s.mode === "PAPER" ? "paper" : "live");
   const pp = $("#pnl"); pp.textContent = pct(s.pnl_today_pct) + " today"; pp.className = s.pnl_today_pct >= 0 ? "green" : "red";
   const mp = $("#mult"); mp.textContent = (mult || 1).toFixed(2) + "x"; mp.className = "pill mult" + ((mult || 1) < 1 ? " down" : "");
   $("#ranges").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x.dataset.r === range));
+  const limEl = $("#limwrap"); if (limEl) limEl.innerHTML = limitsHtml(b);
+  const tixEl = $("#tixwrap"); if (tixEl) tixEl.innerHTML = ticketsHtml(b);
   const pipeEl = $("#pipeline"); if (pipeEl) pipeEl.innerHTML = pipelineHtml(b);
   const netEl = $("#netwrap"); if (netEl) netEl.innerHTML = botNetworkHtml(s.agents || [], b);
   const bstEl = $("#bstatwrap"); if (bstEl) bstEl.innerHTML = botStatusCardsHtml(s.agents || [], b);
@@ -491,10 +738,11 @@ function renderHome() {
   const aghBits = [];
   if (run) aghBits.push(run + " running");
   if (nIdle) aghBits.push(nIdle + " idle");
+  if (nWaiting) aghBits.push(nWaiting + " waiting");
   if (nStopped) aghBits.push(nStopped + " stopped");
   if (nStale) aghBits.push(nStale + " stale");
-  $("#agh").innerHTML = `Agents · <span class="${run ? "green" : "orange"}">${esc(aghBits.join(" · ") || "none")}</span>`;
-  $("#car").innerHTML = s.agents.map((a) => { const rst = agentRunState(a); return `<div class="mini" data-go="agents"><div class="n">${catAvatar(a.name, 28)}<span class="dot ${stateDotClass(rst)}"></span>${a.name}</div><div class="c">${a.today}</div><div class="l">${esc(a.detail || agentLine(a))}</div></div>`; }).join("");
+  $("#agh").innerHTML = `Floor · <span class="${run ? "green" : "orange"}">${esc(aghBits.join(" · ") || "none")}</span>`;
+  $("#car").innerHTML = orderAgents(s.agents).map((a) => { const rst = agentRunState(a); return `<div class="mini" data-go="agents"><div class="n">${catAvatar(a.name, 28)}<span class="dot ${stateDotClass(rst)}"></span>${esc(agentTitle(a.name))}</div><div class="c">${a.today}</div><div class="l">${esc(a.detail || agentLine(a))}</div></div>`; }).join("");
   const items = (b.activity.items || []).slice(0, 5);
   $("#homeact").innerHTML = items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`;
   const age = Math.max(0, Math.round(Date.now() / 1000 - b.ts));
@@ -508,7 +756,7 @@ function renderAgents() {
     const dec = (b.decisions && b.decisions[a.name] || a.decisions || []).slice(0, 20), st = agentRunState(a), all = openAgents[a.name], rows = all ? dec : dec.slice(0, 5);
     const lock = a.name === "risk" && hasPos;
     const noteLabel = st === "stopped" ? "Stopped" : st === "stale" ? "No heartbeat" : st === "idle" ? "Idle" : "Running";
-    return `<div class="card"><div class="ac-h">${catAvatar(a.name, 36)}<span class="dot ${stateDotClass(st)}"></span><div class="nm">${a.name}</div><div class="cnt">today <b style="color:#fff">${a.today}</b></div>
+    return `<div class="card"><div class="ac-h">${catAvatar(a.name, 36)}<span class="dot ${stateDotClass(st)}"></span><div class="nm">${esc(agentTitle(a.name))}</div><div class="cnt">today <b style="color:#fff">${a.today}</b></div>
       <button class="sw ${a.paused ? "" : "on"}" data-sw="${a.name}" ${lock ? "disabled" : ""} aria-label="${a.name} ${a.paused ? "paused" : st}"></button></div>
       ${agentExtrasHtml(a, st)}
       <div class="note">${noteLabel} · ${esc(a.detail || "")}${lock ? " · cannot be paused while a position is open" : ""}</div>
@@ -519,9 +767,13 @@ function renderAgents() {
 function renderActivity() {
   const b = B(), items = (b.activity && b.activity.items) || [];
   $("#v-activity").innerHTML = `<h1 class="t">Activity</h1>
-    <div class="card list" id="actlog">${items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`}</div>
-    <div class="sec" id="deskchat"><h2>Desk chat</h2></div>
+    <div class="sec" id="deskchat"><h2>Trading Floor</h2></div>
     <div class="card chat-card">${chatHtml(b)}</div>
+    <div class="sec" id="funnelhd"><h2>Funnel</h2></div><div class="card" id="funnelwrap">${funnelHtml(b)}</div>
+    <div class="sec"><h2>Journal</h2></div><div class="card" id="jnlwrap">${journalHtml(b)}</div>
+    <div class="sec"><h2>Weekly report</h2></div><div class="card" id="weekwrap">${weeklyHtml(b)}</div>
+    <div class="sec"><h2>Activity log</h2></div>
+    <div class="card list" id="actlog">${items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`}</div>
     <div class="note">Scanner kills and graduations are left out of this feed (hundreds per night); they are in each agent’s decision list.</div>`;
 }
 function renderAccount() {
