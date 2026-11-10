@@ -436,10 +436,25 @@ function catAvatar(name, size) {
   </span>`;
 }
 function orderAgents(agents) {
-  const list = (agents || []).map((a) => ({ ...a, _id: canon(a.name) }));
+  const list = (agents || []).map((a) => ({ ...a, name: a.name || a.id, _id: canon(a.name || a.id) }));
   const rank = (id) => { const i = AGENTS.indexOf(id); return i < 0 ? 99 : i; };
   list.sort((a, b) => rank(a._id) - rank(b._id));
   return list;
+}
+function agentsList(b) {
+  if (!b) return [];
+  const raw = (b.state && b.state.agents != null) ? b.state.agents
+    : (b.agents != null ? b.agents : null);
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return orderAgents(raw);
+  if (typeof raw === "object") {
+    return orderAgents(Object.entries(raw).map(([id, a]) => {
+      const rec = (a && typeof a === "object" && !Array.isArray(a)) ? { ...a } : { detail: a == null ? "" : String(a) };
+      rec.name = rec.name || rec.id || id;
+      return rec;
+    }));
+  }
+  return [];
 }
 function botNetworkHtml(agents, b) {
   const list = orderAgents(agents);
@@ -568,6 +583,17 @@ function fmtMs(ms) {
   const sec = n / 1000;
   return (sec >= 10 ? sec.toFixed(0) : sec.toFixed(1)) + "s";
 }
+function ticketStageMs(t, b) {
+  if (!t) return null;
+  const local = t.stage_ms || t.stageMs || t.stage_timings || t.timings;
+  if (local && typeof local === "object" && !Array.isArray(local) && Object.keys(local).length) return local;
+  const bag = (b && (b.stage_timings || b.stage_ms || b.timings))
+    || (b && b.state && (b.state.stage_timings || b.state.stage_ms)) || null;
+  if (!bag || typeof bag !== "object" || Array.isArray(bag)) return null;
+  const id = t.id != null ? String(t.id) : "";
+  if (id && bag[id] && typeof bag[id] === "object") return bag[id];
+  return null;
+}
 function stageMsHtml(sm) {
   if (!sm || typeof sm !== "object" || Array.isArray(sm)) return "";
   const keys = Object.keys(sm);
@@ -576,6 +602,18 @@ function stageMsHtml(sm) {
     const lab = FLOOR_STAGE_LABEL[canon(k)] || String(k).toUpperCase();
     return `<span><i>${esc(lab)}</i> ${esc(fmtMs(sm[k]))}</span>`;
   }).join("")}</div>`;
+}
+function timingsBag(b) {
+  return (b && (b.stage_timings || b.stage_ms)) || (b && b.state && (b.state.stage_timings || b.state.stage_ms)) || null;
+}
+function timingsHtml(b) {
+  const bag = timingsBag(b);
+  if (bag == null) return WAIT;
+  if (typeof bag !== "object" || Array.isArray(bag) || !Object.keys(bag).length) return `<div class="wait">No stage timings yet</div>`;
+  const entries = Object.entries(bag);
+  const looksStages = entries.every(([k, v]) => numOk(v) && (FLOOR_STAGES.includes(canon(k)) || PIPE_STAGES.includes(String(k).toUpperCase())));
+  if (looksStages) return stageMsHtml(bag);
+  return `<div class="tix-list">${entries.map(([id, sm]) => `<div class="tix"><div class="tix-id">#${esc(id)}</div>${stageMsHtml(sm)}</div>`).join("")}</div>`;
 }
 function ticketsHtml(b) {
   const list = pickList(b, "tickets");
@@ -617,7 +655,7 @@ function ticketsHtml(b) {
         <div><label>Opened</label><b>${esc(when || "—")}</b></div>
       </div>
       ${latency ? `<div class="tix-lat">${esc(latency)}</div>` : ""}
-      ${stageMsHtml(t.stage_ms || t.stageMs)}
+      ${stageMsHtml(ticketStageMs(t, b))}
       ${killShow ? `<div class="tix-kill">Kill: ${esc(killShow)}</div>` : ""}
       <div class="tix-chain">${chain.length ? chain.map((n) => catAvatar(n, 22)).join("") : `<span class="dd">chain —</span>`}</div>
       ${actions}
@@ -645,8 +683,9 @@ function journalHtml(b) {
   }).join("")}</div>`;
 }
 function weeklyHtml(b) {
+  const hasKey = b && (("weekly_report" in b) || (b.state && "weekly_report" in b.state));
   const w = (b && (b.weekly_report != null ? b.weekly_report : (b.state && b.state.weekly_report)));
-  if (w == null || w === "") return WAIT;
+  if (w == null || w === "") return hasKey ? `<div class="wait">No weekly report yet</div>` : WAIT;
   if (typeof w === "string") return `<div class="weekly">${esc(w)}</div>`;
   if (typeof w !== "object") return WAIT;
   const pnlV = w.pnl_usd != null ? Number(w.pnl_usd) : (w.pnl != null ? Number(w.pnl) : null);
@@ -680,14 +719,20 @@ function funnelHtml(b) {
     });
   }
   const kills = Array.isArray(f.kills) ? f.kills : [];
-  const reasonMap = new Map();
-  kills.forEach((k) => {
-    const reason = String((k && (k.reason || k.kill_reason || k.why)) || "").trim() || "unspecified";
-    const rec = reasonMap.get(reason) || { reason, n: 0, stage: (k && k.stage) || "", asset: (k && (k.asset || k.symbol || shortMint(k.mint))) || "" };
-    rec.n += 1;
-    reasonMap.set(reason, rec);
-  });
-  const top = [...reasonMap.values()].sort((a, c) => c.n - a.n).slice(0, 5);
+  let top = [];
+  if (Array.isArray(f.reasons) && f.reasons.length) {
+    top = f.reasons.map((r) => ({ reason: r.reason || r.why || "unspecified", n: Number(r.n) || 0, stage: r.stage || "" }))
+      .sort((a, c) => c.n - a.n).slice(0, 5);
+  } else {
+    const reasonMap = new Map();
+    kills.forEach((k) => {
+      const reason = String((k && (k.reason || k.kill_reason || k.why)) || "").trim() || "unspecified";
+      const rec = reasonMap.get(reason) || { reason, n: 0, stage: (k && k.stage) || "", asset: (k && (k.asset || k.symbol || shortMint(k.mint))) || "" };
+      rec.n += 1;
+      reasonMap.set(reason, rec);
+    });
+    top = [...reasonMap.values()].sort((a, c) => c.n - a.n).slice(0, 5);
+  }
   const stageKeys = Object.keys(counts);
   const countHtml = stageKeys.length
     ? `<div class="fun-stages">${stageKeys.map((k) => {
@@ -701,8 +746,35 @@ function funnelHtml(b) {
   if (!countHtml && !top.length && !kills.length) return `<div class="wait">No funnel data yet</div>`;
   return `<div class="funnel">${countHtml}${killHtml}</div>`;
 }
+function fmtWhen(t) {
+  if (t == null || t === "" || !isFinite(Number(t))) return "";
+  const n = Number(t);
+  const ms = n < 1e12 ? n * 1000 : n;
+  return new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function catalystsHtml(b) {
+  const c = pickObj(b, "catalysts");
+  if (!c) return WAIT;
+  const up = Array.isArray(c.upcoming) ? c.upcoming : [];
+  const news = Array.isArray(c.recent_news) ? c.recent_news : (Array.isArray(c.news) ? c.news : []);
+  const unavail = (c.unavailable && typeof c.unavailable === "object" && !Array.isArray(c.unavailable)) ? c.unavailable : null;
+  const upHtml = up.length
+    ? `<div class="cat-list">${up.map((e) => {
+        const when = fmtWhen(e.ts || e.t || e.at || e.when);
+        return `<div class="cat-row"><div class="tt">${esc(e.title || e.name || e.kind || "Event")}</div><div class="dd">${esc([when, e.source || e.kind].filter(Boolean).join(" · "))}</div></div>`;
+      }).join("")}</div>`
+    : "";
+  const newsHtml = news.length
+    ? `<div class="cat-list">${news.map((e) => `<div class="cat-row"><div class="tt">${esc(e.title || e.headline || e.text || "News")}</div><div class="dd">${esc(fmtWhen(e.ts || e.t) || e.source || "")}</div></div>`).join("")}</div>`
+    : "";
+  const missHtml = unavail
+    ? `<div class="cat-miss">${Object.entries(unavail).map(([k, v]) => v ? `<div class="dd"><b>${esc(k)}</b> — ${esc(v)}</div>` : "").join("")}</div>`
+    : "";
+  if (!upHtml && !newsHtml && !missHtml) return `<div class="wait">No catalysts yet</div>`;
+  return `<div class="catalysts">${upHtml}${newsHtml}${missHtml}</div>`;
+}
 function renderHome() {
-  const b = B(), s = b.state, ch = b.chart || {}, runStates = (s.agents || []).map(agentRunState), run = runStates.filter((st) => st === "running").length, nIdle = runStates.filter((st) => st === "idle").length, nWaiting = runStates.filter((st) => st === "waiting").length, nStopped = runStates.filter((st) => st === "stopped").length, nStale = runStates.filter((st) => st === "stale").length;
+  const b = B(), s = b.state, ch = b.chart || {}, agents = agentsList(b), runStates = agents.map(agentRunState), run = runStates.filter((st) => st === "running").length, nIdle = runStates.filter((st) => st === "idle").length, nWaiting = runStates.filter((st) => st === "waiting").length, nStopped = runStates.filter((st) => st === "stopped").length, nStale = runStates.filter((st) => st === "stale").length;
   const mult = ch.multiplier, el = $("#v-home");
   if (!$("#bal")) {
     el.innerHTML = `<div class="label">Portfolio</div>
@@ -710,6 +782,7 @@ function renderHome() {
       <div class="sub"><span id="pnl"></span><span class="pill mult" id="mult"></span></div>
       <div class="sec" style="margin-top:16px"><h2>Limits</h2></div><div class="card" id="limwrap"></div>
       <div class="sec"><h2>Tickets</h2></div><div id="tixwrap"></div>
+      <div class="sec"><h2>Catalysts</h2></div><div class="card" id="catwrap"></div>
       <div class="card" style="margin-top:8px"><div class="sec" style="margin:0 0 8px"><h2 style="font-size:16px">Desk cycle</h2></div><div id="pipeline"></div></div>
       <div class="sec" id="desknet"><h2>Trading floor</h2></div><div class="card" id="netwrap"></div>
       <div class="sec"><h2>Floor status</h2></div><div id="bstatwrap"></div>
@@ -728,9 +801,10 @@ function renderHome() {
   $("#ranges").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x.dataset.r === range));
   const limEl = $("#limwrap"); if (limEl) limEl.innerHTML = limitsHtml(b);
   const tixEl = $("#tixwrap"); if (tixEl) tixEl.innerHTML = ticketsHtml(b);
+  const catEl = $("#catwrap"); if (catEl) catEl.innerHTML = catalystsHtml(b);
   const pipeEl = $("#pipeline"); if (pipeEl) pipeEl.innerHTML = pipelineHtml(b);
-  const netEl = $("#netwrap"); if (netEl) netEl.innerHTML = botNetworkHtml(s.agents || [], b);
-  const bstEl = $("#bstatwrap"); if (bstEl) bstEl.innerHTML = botStatusCardsHtml(s.agents || [], b);
+  const netEl = $("#netwrap"); if (netEl) netEl.innerHTML = botNetworkHtml(agents, b);
+  const bstEl = $("#bstatwrap"); if (bstEl) bstEl.innerHTML = botStatusCardsHtml(agents, b);
   const ideasEl = $("#ideaswrap"); if (ideasEl) ideasEl.innerHTML = ideasHtml(b);
   const open = (s.positions || []).filter((p) => p.status === "open");
   $("#poswrap").innerHTML = `<div class="sec"><h2>Paper positions</h2></div><div class="card">${paperTableHtml(b)}</div>` +
@@ -742,7 +816,7 @@ function renderHome() {
   if (nStopped) aghBits.push(nStopped + " stopped");
   if (nStale) aghBits.push(nStale + " stale");
   $("#agh").innerHTML = `Floor · <span class="${run ? "green" : "orange"}">${esc(aghBits.join(" · ") || "none")}</span>`;
-  $("#car").innerHTML = orderAgents(s.agents).map((a) => { const rst = agentRunState(a); return `<div class="mini" data-go="agents"><div class="n">${catAvatar(a.name, 28)}<span class="dot ${stateDotClass(rst)}"></span>${esc(agentTitle(a.name))}</div><div class="c">${a.today}</div><div class="l">${esc(a.detail || agentLine(a))}</div></div>`; }).join("");
+  $("#car").innerHTML = agents.map((a) => { const rst = agentRunState(a); return `<div class="mini" data-go="agents"><div class="n">${catAvatar(a.name, 28)}<span class="dot ${stateDotClass(rst)}"></span>${esc(agentTitle(a.name))}</div><div class="c">${a.today != null ? a.today : "—"}</div><div class="l">${esc(a.detail || agentLine(a))}</div></div>`; }).join("");
   const items = (b.activity.items || []).slice(0, 5);
   $("#homeact").innerHTML = items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`;
   const age = Math.max(0, Math.round(Date.now() / 1000 - b.ts));
@@ -751,12 +825,12 @@ function renderHome() {
 }
 function decRow(d, a) { return `<div class="row" ${d.mint ? `data-${a === "auditor" ? "audit" : "coin"}="${esc(d.mint)}"` : ""}><div class="tt" style="font-size:14px;font-weight:400">${esc(d.text)}</div><div class="tm">${hhmm(d.t)}</div></div>`; }
 function renderAgents() {
-  const b = B(), s = b.state, hasPos = (s.positions || []).some((p) => p.status === "open");
-  $("#v-agents").innerHTML = `<h1 class="t">Agents</h1>` + s.agents.map((a) => {
-    const dec = (b.decisions && b.decisions[a.name] || a.decisions || []).slice(0, 20), st = agentRunState(a), all = openAgents[a.name], rows = all ? dec : dec.slice(0, 5);
-    const lock = a.name === "risk" && hasPos;
-    const noteLabel = st === "stopped" ? "Stopped" : st === "stale" ? "No heartbeat" : st === "idle" ? "Idle" : "Running";
-    return `<div class="card"><div class="ac-h">${catAvatar(a.name, 36)}<span class="dot ${stateDotClass(st)}"></span><div class="nm">${esc(agentTitle(a.name))}</div><div class="cnt">today <b style="color:#fff">${a.today}</b></div>
+  const b = B(), s = b.state, agents = agentsList(b), hasPos = ((pickList(b, "positions") || s.positions || []).some((p) => p.status === "open"));
+  $("#v-agents").innerHTML = `<h1 class="t">Agents</h1>` + agents.map((a) => {
+    const dec = (b.decisions && (b.decisions[a.name] || b.decisions[a._id]) || a.decisions || []).slice(0, 20), st = agentRunState(a), all = openAgents[a.name], rows = all ? dec : dec.slice(0, 5);
+    const lock = canon(a.name) === "risk" && hasPos;
+    const noteLabel = st === "stopped" ? "Stopped" : st === "stale" ? "No heartbeat" : st === "waiting" ? "Waiting" : st === "idle" ? "Idle" : "Running";
+    return `<div class="card"><div class="ac-h">${catAvatar(a.name, 36)}<span class="dot ${stateDotClass(st)}"></span><div class="nm">${esc(agentTitle(a.name))}</div><div class="cnt">today <b style="color:#fff">${a.today != null ? a.today : "—"}</b></div>
       <button class="sw ${a.paused ? "" : "on"}" data-sw="${a.name}" ${lock ? "disabled" : ""} aria-label="${a.name} ${a.paused ? "paused" : st}"></button></div>
       ${agentExtrasHtml(a, st)}
       <div class="note">${noteLabel} · ${esc(a.detail || "")}${lock ? " · cannot be paused while a position is open" : ""}</div>
@@ -770,6 +844,7 @@ function renderActivity() {
     <div class="sec" id="deskchat"><h2>Trading Floor</h2></div>
     <div class="card chat-card">${chatHtml(b)}</div>
     <div class="sec" id="funnelhd"><h2>Funnel</h2></div><div class="card" id="funnelwrap">${funnelHtml(b)}</div>
+    <div class="sec"><h2>Stage timings</h2></div><div class="card" id="timewrap">${timingsHtml(b)}</div>
     <div class="sec"><h2>Journal</h2></div><div class="card" id="jnlwrap">${journalHtml(b)}</div>
     <div class="sec"><h2>Weekly report</h2></div><div class="card" id="weekwrap">${weeklyHtml(b)}</div>
     <div class="sec"><h2>Activity log</h2></div>
@@ -928,7 +1003,7 @@ document.addEventListener("click", async (e) => {
   else if (D.r) { range = D.r; renderHome(); }
   else if (D.coin) openCoin(D.coin); else if (D.audit !== undefined) { e.preventDefault(); b.audits[D.audit] ? openAudit(D.audit) : openCoin(D.audit); }
   else if (D.back !== undefined) history.back();
-  else if (D.sw) { const a = b.state.agents.find((x) => x.name === D.sw); tgCommand(`${a.paused ? "resume" : "pause"} ${D.sw}`, `${a.paused ? "resume" : "pause"}_${D.sw}`, a.paused ? "Resume" : "Pause"); }
+  else if (D.sw) { const a = agentsList(b).find((x) => x.name === D.sw || canon(x.name) === canon(D.sw)); if (a) tgCommand(`${a.paused ? "resume" : "pause"} ${a.name}`, `${a.paused ? "resume" : "pause"}_${tgSafe(a.name)}`, a.paused ? "Resume" : "Pause"); }
   else if (D.more) { openAgents[D.more] = !openAgents[D.more]; renderAgents(); }
   else if (D.mode) { const m = D.mode; if (m === b.account.mode) return; if (m === "PAPER") tgCommand("paper", "paper", "Switch to simulation");
     else if (!(b.account.live_gate && b.account.live_gate.ready)) toast("LIVE stays gated: " + b.account.live_gate.reason); else { await navigator.clipboard.writeText("live").catch(() => {}); toast("Send “live” in Telegram, then type LIVE to confirm."); window.open(b.links.bot_url, "_blank", "noopener"); } }

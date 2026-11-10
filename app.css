@@ -245,3 +245,10 @@ table.pos th:last-child,table.pos td.pos-pnl{text-align:right;width:72px;overflo
 .fun-kills{margin-top:10px;display:flex;flex-direction:column;gap:6px}
 .fun-kill{font-size:12.5px;line-height:1.35}
 .fun-kill b{color:var(--red);margin-right:6px;font-family:"Roboto Mono",ui-monospace,monospace}
+
+.cat-list{display:flex;flex-direction:column;gap:8px}
+.cat-row .tt{font-size:13.5px;font-weight:600}
+.cat-row .dd{font-size:12px;margin-top:1px}
+.cat-miss{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.cat-miss .dd{font-size:12px;line-height:1.35}
+.cat-miss b{text-transform:capitalize;color:rgba(235,235,245,.75)}
