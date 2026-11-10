@@ -219,6 +219,7 @@ table.pos th:last-child,table.pos td.pos-pnl{text-align:right;width:72px;overflo
 .tix-chain{display:flex;align-items:center;gap:4px;margin-top:10px;flex-wrap:wrap}
 .tix-lat{margin-top:8px;font-size:12.5px;font-family:"Roboto Mono",ui-monospace,monospace;color:var(--cyan)}
 .tix-kill{margin-top:6px;font-size:12.5px;color:var(--red);line-height:1.35}
+.tix-oos{margin-top:6px;font-size:12.5px;color:var(--orange);line-height:1.35}
 .tix-actions{display:flex;gap:8px;margin-top:12px}
 .tix-btn{flex:1;text-align:center;text-decoration:none;border-radius:12px;padding:10px 8px;font-size:13px;font-weight:700}
 .tix-btn.go{background:rgba(0,211,90,.16);color:var(--green)}

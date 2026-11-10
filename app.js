@@ -615,6 +615,38 @@ function timingsHtml(b) {
   if (looksStages) return stageMsHtml(bag);
   return `<div class="tix-list">${entries.map(([id, sm]) => `<div class="tix"><div class="tix-id">#${esc(id)}</div>${stageMsHtml(sm)}</div>`).join("")}</div>`;
 }
+function isOosPass(st) {
+  const s = String(st || "").toLowerCase().trim();
+  return s === "pass" || s === "passed" || s === "ok" || s === "clear";
+}
+function warningList(v) {
+  const out = [];
+  const add = (x) => {
+    if (x == null || x === "") return;
+    if (typeof x === "string") { const t = x.trim(); if (t) out.push(t); return; }
+    if (Array.isArray(x)) { x.forEach(add); return; }
+    if (typeof x === "object") add(x.text || x.message || x.reason || x.warning);
+  };
+  add(v);
+  return out;
+}
+function ticketOosLine(t) {
+  if (!t) return "";
+  const oos = (t.oos && typeof t.oos === "object" && !Array.isArray(t.oos)) ? t.oos : null;
+  const warns = warningList(t.warning).concat(warningList(t.warnings), warningList(oos && oos.warning), warningList(oos && oos.warnings));
+  let line = "";
+  if (oos && !isOosPass(oos.status)) {
+    const st = oos.status != null && String(oos.status) !== "" ? String(oos.status) : "";
+    const nPart = (oos.n != null && oos.n !== "") ? `(n=${oos.n})` : "";
+    const head = st ? `OOS: ${st}${nPart ? " " + nPart : ""}` : (nPart ? `OOS: ${nPart}` : "OOS");
+    const reason = oos.reason != null && String(oos.reason) !== "" ? String(oos.reason) : "";
+    line = reason ? `${head} · ${reason}` : head;
+  }
+  const extra = warns.filter((w) => !isOosPass(w) && (!line || line.indexOf(w) < 0));
+  if (!line && extra.length) return extra.join(" · ");
+  if (line && extra.length) return line + " · " + extra.join(" · ");
+  return line;
+}
 function ticketsHtml(b) {
   const list = pickList(b, "tickets");
   if (!list) return WAIT;
@@ -644,6 +676,7 @@ function ticketsHtml(b) {
     }
     const killed = st === "killed" || st === "kill" || st === "veto";
     const killShow = killed && t.kill_reason ? String(t.kill_reason) : "";
+    const oosLine = ticketOosLine(t);
     return `<div class="tix">
       <div class="tix-top"><div class="tix-id">#${esc(id || "—")}</div><div class="tix-flags">${ticketStatusChip(t)}${ticketAutoTag(t)}</div></div>
       <div class="tix-asset">${esc(t.asset || t.symbol || t.name || "—")} <span class="tix-dir">${esc(dir)}</span></div>
@@ -656,6 +689,7 @@ function ticketsHtml(b) {
       </div>
       ${latency ? `<div class="tix-lat">${esc(latency)}</div>` : ""}
       ${stageMsHtml(ticketStageMs(t, b))}
+      ${oosLine ? `<div class="tix-oos">${esc(oosLine)}</div>` : ""}
       ${killShow ? `<div class="tix-kill">Kill: ${esc(killShow)}</div>` : ""}
       <div class="tix-chain">${chain.length ? chain.map((n) => catAvatar(n, 22)).join("") : `<span class="dd">chain —</span>`}</div>
       ${actions}
