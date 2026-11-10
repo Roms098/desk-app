@@ -229,16 +229,25 @@ function chatHtml(b) {
   const list = pickList(b, "chat");
   if (!list) return WAIT;
   if (!list.length) return `<div class="wait">No desk chat yet</div>`;
-  return list.slice(0, 30).map((m) => {
-    const name = m.name || m.agent || m.bot || m.from || "?";
-    const initial = String(name).trim().charAt(0).toUpperCase() || "?";
+  const items = list.slice(0, 40);
+  function chatName(m) { return m.name || m.agent || m.bot || m.from || "?"; }
+  return `<div class="chat-feed">${items.map((m, i) => {
+    const name = chatName(m);
+    const prev = i ? chatName(items[i - 1]) : "";
+    const same = prev && String(prev).toLowerCase() === String(name).toLowerCase();
     const msg = m.message || m.text || m.body || "";
     const t = m.created_at || m.ts || m.t || m.time;
     const tShow = t != null ? hhmm(Number(t) < 1e12 ? Number(t) : Number(t) / 1000) : "";
-    return `<div class="chat-line"><div class="avatar" aria-hidden="true">${esc(initial)}</div>
-      <div class="chat-body"><div class="chat-meta"><span class="chat-name">${esc(name)}</span>${tShow ? `<span class="chat-time">${esc(tShow)}</span>` : ""}</div>
-      <div class="chat-msg">${esc(msg)}</div></div></div>`;
-  }).join("");
+    const accent = catLook(name).accent;
+    return `<div class="bubble-row${same ? " same" : ""}">
+      <div class="bubble-av">${same ? "" : catAvatar(name, 36)}</div>
+      <div class="bubble-col">
+        ${same ? "" : `<div class="bubble-name" style="color:${accent}">${esc(name)}</div>`}
+        <div class="bubble" style="border-left-color:${accent}">${esc(msg)}</div>
+        ${tShow ? `<div class="bubble-time">${esc(tShow)}</div>` : ""}
+      </div>
+    </div>`;
+  }).join("")}</div>`;
 }
 function agentExtrasHtml(a, st) {
   const role = a.role || ROLE_MAP[String(a.name || "").toLowerCase()] || "";
@@ -254,12 +263,134 @@ function agentExtrasHtml(a, st) {
     ${last ? `<div class="agent-last">${esc(last)}</div>` : ""}`;
 }
 
+
+const CAT_LOOKS = {
+  scanner:  { fur:"#f3c48a", inner:"#ff9db4", iris:"#4d8dff", irisDark:"#1e4db5", stroke:"#b67a3c", brow:"curious", mark:"tuft", accent:"#0a84ff" },
+  auditor:  { fur:"#eef2f7", inner:"#f5b8c6", iris:"#3ad3e0", irisDark:"#0e7a86", stroke:"#8b95a3", brow:"serious", mark:"tips", accent:"#64d2ff" },
+  analyst:  { fur:"#e09a4c", inner:"#ee8a7a", iris:"#f0b429", irisDark:"#a45e0c", stroke:"#8a4e18", brow:"think", mark:"tabby", accent:"#ff9f0a" },
+  executor: { fur:"#2c2c30", inner:"#f0a8b8", iris:"#b6e04a", irisDark:"#4e7a14", stroke:"#121214", brow:"cool", mark:"muzzle", accent:"#00d35a" },
+  risk:     { fur:"#8a4e2c", inner:"#e8b89a", iris:"#ef5a5a", irisDark:"#8a1e1e", stroke:"#5a2e18", brow:"worry", mark:"tips", accent:"#ff453a" },
+};
+function catLook(name) {
+  const k = String(name || "").toLowerCase();
+  if (CAT_LOOKS[k]) return CAT_LOOKS[k];
+  const keys = Object.keys(CAT_LOOKS);
+  let h = 0; for (let i = 0; i < k.length; i++) h = (h + k.charCodeAt(i) * 17) % keys.length;
+  return CAT_LOOKS[keys[h]];
+}
+let _catUid = 0;
+function catBrows(kind, color) {
+  const s = `fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round"`;
+  if (kind === "serious") return `<path d="M15.5 21.8 Q22 20.8 28 21.8" ${s}/><path d="M36 21.8 Q42 20.8 48.5 21.8" ${s}/>`;
+  if (kind === "think") return `<path d="M15.8 23.2 Q22 19.6 28.2 22.8" ${s}/><path d="M35.8 22.8 Q42 19.6 48.2 23.2" ${s}/>`;
+  if (kind === "cool") return `<path d="M16 21.2 Q22 20.2 28.2 23.4" ${s}/><path d="M35.8 23.4 Q42 20.2 48 21.2" ${s}/>`;
+  if (kind === "worry") return `<path d="M16.2 24.2 Q22 18.8 28.4 21.4" ${s}/><path d="M35.6 21.4 Q42 18.8 47.8 24.2" ${s}/>`;
+  return `<path d="M15.8 22.2 Q22 17.8 28.2 21.2" ${s}/><path d="M35.8 21.2 Q42 17.8 48.2 22.2" ${s}/>`;
+}
+function catMarks(kind, L) {
+  if (kind === "tabby") return `<path d="M32 16 L32 24" stroke="${L.stroke}" stroke-width="2.2" stroke-linecap="round"/><path d="M27 17 L28.2 24" stroke="${L.stroke}" stroke-width="1.8" stroke-linecap="round"/><path d="M37 17 L35.8 24" stroke="${L.stroke}" stroke-width="1.8" stroke-linecap="round"/>`;
+  if (kind === "tuft") return `<path d="M32 12 Q34 8 31 6 Q30 14 32 16" fill="${L.fur}" stroke="${L.stroke}" stroke-width=".8"/>`;
+  if (kind === "muzzle") return `<ellipse cx="32" cy="44" rx="9" ry="6.5" fill="#4a4a50"/>`;
+  if (kind === "tips") return `<path d="M14 16 L11 7 L18 12 Z" fill="${L.stroke}" opacity=".55"/><path d="M50 16 L53 7 L46 12 Z" fill="${L.stroke}" opacity=".55"/>`;
+  return "";
+}
+function catEye(cx, L) {
+  return `<ellipse cx="${cx}" cy="33" rx="7.4" ry="9.2" fill="#fff"/>
+    <ellipse cx="${cx}" cy="33.6" rx="6.3" ry="7.8" fill="${L.iris}"/>
+    <ellipse cx="${cx}" cy="37.2" rx="5.2" ry="4.2" fill="${L.irisDark}" opacity=".5"/>
+    <ellipse cx="${cx}" cy="33.6" rx="2.7" ry="4.6" fill="#1a1020"/>
+    <ellipse cx="${cx + 2.3}" cy="29.6" rx="2.5" ry="3.3" fill="#fff"/>
+    <circle cx="${cx - 2.2}" cy="35.2" r="1.15" fill="#fff" opacity=".95"/>
+    <path d="M${cx - 7.2} 28.2 Q${cx} 22.6 ${cx + 7.2} 28.2" fill="none" stroke="#1a1020" stroke-width="1.7" stroke-linecap="round"/>`;
+}
+function catSvgInner(name) {
+  const L = catLook(name);
+  const k = String(name || "").toLowerCase();
+  const initial = esc(String(name || "?").trim().charAt(0).toUpperCase() || "?");
+  return `
+    <circle cx="32" cy="36" r="22" fill="${L.fur}"/>
+    <path d="M13 30 Q8 5 26 20 Z" fill="${L.fur}"/>
+    <path d="M51 30 Q56 5 38 20 Z" fill="${L.fur}"/>
+    <path d="M15 24 Q12 10 23 20 Z" fill="${L.inner}"/>
+    <path d="M49 24 Q52 10 41 20 Z" fill="${L.inner}"/>
+    ${catMarks(L.mark, L)}
+    ${catBrows(L.brow, L.stroke)}
+    ${catEye(22.2, L)}
+    ${catEye(41.8, L)}
+    <ellipse cx="16.5" cy="41.5" rx="4.2" ry="2.3" fill="#ff8aa8" opacity=".62"/>
+    <ellipse cx="47.5" cy="41.5" rx="4.2" ry="2.3" fill="#ff8aa8" opacity=".62"/>
+    <path d="M29 45.2 Q32 48 35 45.2" fill="none" stroke="${L.stroke}" stroke-width="1.3" stroke-linecap="round"/>
+    <path d="M32 45.6 Q32 47.4 32 47.4" fill="none" stroke="${L.stroke}" stroke-width="1.1" stroke-linecap="round"/>
+    <circle cx="50" cy="14" r="7" fill="${L.accent}" stroke="#000" stroke-opacity=".15" stroke-width=".6"/>
+    <text x="50" y="17.2" text-anchor="middle" font-size="8" font-weight="700" fill="#fff" font-family="Roboto,system-ui,sans-serif">${initial}</text>`;
+}
+function catAvatar(name, size) {
+  const L = catLook(name), s = size || 40, id = "cr" + (++_catUid);
+  return `<span class="cat" style="width:${s}px;height:${s}px" title="${esc(name || "")}" aria-hidden="true">
+    <svg viewBox="0 0 64 64" width="${s}" height="${s}">
+      <defs><clipPath id="${id}"><circle cx="32" cy="32" r="30"/></clipPath></defs>
+      <g clip-path="url(#${id})">${catSvgInner(name)}</g>
+      <circle cx="32" cy="32" r="30.5" fill="none" stroke="${L.accent}" stroke-width="3"/>
+    </svg>
+  </span>`;
+}
+function botNetworkHtml(agents, b) {
+  const list = (agents || []).slice(0, 5);
+  if (!list.length) return WAIT;
+  const W = 360, H = 176;
+  const pts = [[180, 34], [64, 76], [296, 76], [96, 144], [264, 144]];
+  const links = [[0,1],[0,2],[1,3],[2,4],[1,2],[3,4],[0,3],[0,4]];
+  const lines = links.map(([i,j]) => {
+    if (i >= list.length || j >= list.length) return "";
+    const a = pts[i], c = pts[j];
+    return `<path d="M${a[0]} ${a[1]} Q${(a[0]+c[0])/2} ${(a[1]+c[1])/2 - 8} ${c[0]} ${c[1]}" fill="none" stroke="rgba(10,132,255,.45)" stroke-width="1.4"/>`;
+  }).join("");
+  const nodes = list.map((ag, i) => {
+    const [x,y] = pts[i];
+    const st = (ag.state || agentState(ag, b) || "idle");
+    const cls = statePillClass(st);
+    const col = cls === "veto" ? "#ff453a" : cls === "debating" ? "#bf5af2" : (cls === "scanning" || cls === "analyzing") ? "#0a84ff" : "#00d35a";
+    const accent = catLook(ag.name).accent;
+    return `<g>
+      <circle cx="${x}" cy="${y}" r="24" fill="#111" stroke="${col}" stroke-width="2.4"/>
+      <circle cx="${x}" cy="${y}" r="21.5" fill="none" stroke="${accent}" stroke-width="1.6"/>
+      <g transform="translate(${x-18},${y-18}) scale(${36/64})">${catSvgInner(ag.name)}</g>
+      <text x="${x}" y="${y+36}" text-anchor="middle" fill="rgba(235,235,245,.75)" font-size="9" font-family="Roboto,system-ui,sans-serif">${esc(ag.name)}</text>
+    </g>`;
+  }).join("");
+  return `<div class="net-card"><svg class="net-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Bot network">${lines}${nodes}</svg></div>`;
+}
+function botStatusCardsHtml(agents, b) {
+  const list = agents || [];
+  if (!list.length) return WAIT;
+  return `<div class="bstats">${list.map((a) => {
+    const st = a.state || agentState(a, b) || "idle";
+    const conv = convPct(a.conviction);
+    return `<div class="bstat">
+      ${catAvatar(a.name, 48)}
+      <div class="who"><div class="nm">${esc(a.name)}</div>
+        <div class="agent-role">${esc(a.role || ROLE_MAP[String(a.name||"").toLowerCase()] || "")}</div>
+        ${conv != null ? `<div class="conv" style="margin-top:6px"><div class="conv-bar"><i style="width:${conv}%"></i></div></div>` : ""}
+      </div>
+      <span class="pill state ${statePillClass(st)}">${esc(st)}</span>
+    </div>`;
+  }).join("")}</div>`;
+}
+
 /* ---------- views ---------- */
 function agentLine(a) { const d = (a.decisions || [])[0]; return d ? d.text : "no decisions yet"; }
 function agentState(a, b) { const fresh = a.last_beat && Date.now() / 1000 - a.last_beat < 120; return a.paused ? "off" : fresh ? "ok" : "down"; }
+function activityAgent(i) {
+  if (i.agent || i.bot || i.name) return i.agent || i.bot || i.name;
+  const t = String((i.title || "") + " " + (i.kind || "") + " " + (i.detail || "")).toLowerCase();
+  for (const n of AGENTS) if (t.includes(n)) return n;
+  return null;
+}
 function actRow(i) {
   const col = { scan_pass: GREEN, audit_pass: GREEN, verdict_pass: GREEN, signal: BLUE, exit: ORANGE, audit_fail: RED, verdict_fail: RED, exec_skip: ORANGE }[i.kind] || "#48484a";
-  return `<div class="row" ${i.mint ? `data-coin="${esc(i.mint)}"` : ""}><div class="main"><div class="ic" style="background:${col}"></div><div><div class="tt">${esc(i.title)}</div><div class="dd">${esc(i.detail || i.kind)}</div></div></div><div class="tm">${hhmm(i.created_at)}</div></div>`;
+  const ag = activityAgent(i);
+  const icon = ag ? catAvatar(ag, 28) : `<div class="ic" style="background:${col}"></div>`;
+  return `<div class="row" ${i.mint ? `data-coin="${esc(i.mint)}"` : ""}><div class="main">${icon}<div><div class="tt">${esc(i.title)}</div><div class="dd">${esc(i.detail || i.kind)}</div></div></div><div class="tm">${hhmm(i.created_at)}</div></div>`;
 }
 function renderHome() {
   const b = B(), s = b.state, ch = b.chart || {}, run = s.agents.filter((a) => agentState(a, b) === "ok").length;
@@ -269,6 +400,8 @@ function renderHome() {
       <div class="hero"><div class="bal" id="bal"></div><span class="pill paper" id="paperpill"></span></div>
       <div class="sub"><span id="pnl"></span><span class="pill mult" id="mult"></span></div>
       <div class="card" style="margin-top:8px"><div class="sec" style="margin:0 0 8px"><h2 style="font-size:16px">Desk cycle</h2></div><div id="pipeline"></div></div>
+      <div class="sec" id="desknet"><h2>Bot network</h2></div><div class="card" id="netwrap"></div>
+      <div class="sec"><h2>Bot status</h2></div><div id="bstatwrap"></div>
       <div class="chartwrap"><canvas class="ch" id="homechart"></canvas></div>
       <div class="ranges" id="ranges">${Object.keys(RANGE_S).map((r) => `<button data-r="${r}">${r}</button>`).join("")}</div>
       <div class="sec"><h2>Ideas for you</h2></div><div class="card" id="ideaswrap"></div>
@@ -283,12 +416,14 @@ function renderHome() {
   const mp = $("#mult"); mp.textContent = (mult || 1).toFixed(2) + "x"; mp.className = "pill mult" + ((mult || 1) < 1 ? " down" : "");
   $("#ranges").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x.dataset.r === range));
   const pipeEl = $("#pipeline"); if (pipeEl) pipeEl.innerHTML = pipelineHtml(b);
+  const netEl = $("#netwrap"); if (netEl) netEl.innerHTML = botNetworkHtml(s.agents || [], b);
+  const bstEl = $("#bstatwrap"); if (bstEl) bstEl.innerHTML = botStatusCardsHtml(s.agents || [], b);
   const ideasEl = $("#ideaswrap"); if (ideasEl) ideasEl.innerHTML = ideasHtml(b);
   const open = (s.positions || []).filter((p) => p.status === "open");
   $("#poswrap").innerHTML = `<div class="sec"><h2>Paper positions</h2></div><div class="card">${paperTableHtml(b)}</div>` +
     (open.length ? `<div class="card list" style="margin-top:8px">${open.map((p) => `<div class="row" data-coin="${esc(p.mint)}"><div><div class="tt">${esc(p.name)}</div><div class="dd">${money(p.size_usd)} · stop ${px(p.stop)}${p.trail_active ? " · trail ON" : ""}</div></div><div class="${p.pnl_pct >= 0 ? "green" : "red"}">${pct(p.pnl_pct)}</div></div>`).join("")}</div>` : "");
   $("#agh").innerHTML = `Agents · <span class="${run === 5 ? "green" : "orange"}">${run} running</span>`;
-  $("#car").innerHTML = s.agents.map((a) => `<div class="mini" data-go="agents"><div class="n"><span class="dot ${agentState(a, b) === "ok" ? "" : agentState(a, b)}"></span>${a.name}</div><div class="c">${a.today}</div><div class="l">${esc(agentLine(a))}</div></div>`).join("");
+  $("#car").innerHTML = s.agents.map((a) => `<div class="mini" data-go="agents"><div class="n">${catAvatar(a.name, 28)}<span class="dot ${agentState(a, b) === "ok" ? "" : agentState(a, b)}"></span>${a.name}</div><div class="c">${a.today}</div><div class="l">${esc(agentLine(a))}</div></div>`).join("");
   const items = (b.activity.items || []).slice(0, 5);
   $("#homeact").innerHTML = items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`;
   const age = Math.max(0, Math.round(Date.now() / 1000 - b.ts));
@@ -301,7 +436,7 @@ function renderAgents() {
   $("#v-agents").innerHTML = `<h1 class="t">Agents</h1>` + s.agents.map((a) => {
     const dec = (b.decisions && b.decisions[a.name] || a.decisions || []).slice(0, 20), st = agentState(a, b), all = openAgents[a.name], rows = all ? dec : dec.slice(0, 5);
     const lock = a.name === "risk" && hasPos;
-    return `<div class="card"><div class="ac-h"><span class="dot ${st === "ok" ? "" : st}"></span><div class="nm">${a.name}</div><div class="cnt">today <b style="color:#fff">${a.today}</b></div>
+    return `<div class="card"><div class="ac-h">${catAvatar(a.name, 36)}<span class="dot ${st === "ok" ? "" : st}"></span><div class="nm">${a.name}</div><div class="cnt">today <b style="color:#fff">${a.today}</b></div>
       <button class="sw ${a.paused ? "" : "on"}" data-sw="${a.name}" ${lock ? "disabled" : ""} aria-label="${a.name} ${a.paused ? "paused" : "running"}"></button></div>
       ${agentExtrasHtml(a, st)}
       <div class="note">${a.paused ? "Paused" : st === "down" ? "No heartbeat" : "Running"} · ${esc(a.detail || "")}${lock ? " · cannot be paused while a position is open" : ""}</div>
@@ -310,9 +445,11 @@ function renderAgents() {
   }).join("") + `<div class="note">Pause/resume cannot call the desk directly from this page. Tapping a switch opens Telegram ${esc(b.links.bot_name)} with the command.</div>`;
 }
 function renderActivity() {
-  const b = B(), items = b.activity.items || [];
-  $("#v-activity").innerHTML = `<h1 class="t">Activity</h1><div class="card list">${items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`}</div>
-    <div class="sec"><h2>Desk chat</h2></div><div class="card">${chatHtml(b)}</div>
+  const b = B(), items = (b.activity && b.activity.items) || [];
+  $("#v-activity").innerHTML = `<h1 class="t">Activity</h1>
+    <div class="card list" id="actlog">${items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`}</div>
+    <div class="sec" id="deskchat"><h2>Desk chat</h2></div>
+    <div class="card chat-card">${chatHtml(b)}</div>
     <div class="note">Scanner kills and graduations are left out of this feed (hundreds per night); they are in each agent’s decision list.</div>`;
 }
 function renderAccount() {

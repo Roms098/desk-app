@@ -154,3 +154,30 @@ table.pos{width:100%;border-collapse:collapse;font-size:12px;min-width:440px;fon
 table.pos th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;padding:6px 8px 8px 0;border-bottom:.5px solid var(--sep)}
 table.pos td{padding:10px 8px 10px 0;border-bottom:.5px solid var(--sep);vertical-align:middle}
 table.pos tr:last-child td{border-bottom:0}
+
+
+/* cat avatars + bot network */
+.cat{display:inline-block;flex:none;border-radius:50%;overflow:hidden;background:rgba(255,255,255,.04);line-height:0}
+.cat svg{display:block;width:100%;height:100%}
+#desknet{scroll-margin-top:calc(28px + env(safe-area-inset-top))}
+.net-card{padding:12px 10px 8px}
+.net-svg{width:100%;height:168px;display:block}
+.bstats{display:grid;grid-template-columns:1fr;gap:8px}
+.bstat{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:14px;padding:10px 12px}
+.bstat .who{flex:1;min-width:0}
+.bstat .who .nm{font-size:15px;font-weight:700;text-transform:capitalize;line-height:1.2}
+.mini .n{gap:8px}
+.ac-h .cat{margin-right:2px}
+
+.chat-feed{display:flex;flex-direction:column;gap:12px;padding:2px 0 4px}
+.chat-card{padding:14px 12px}
+.bubble-row{display:flex;gap:8px;align-items:flex-end}
+.bubble-row.same{margin-top:-4px}
+.bubble-av{width:36px;flex:none;min-height:1px}
+.bubble-col{flex:1;min-width:0}
+.bubble-name{font-size:12px;font-weight:700;margin:0 0 4px 6px;text-transform:capitalize}
+.bubble{background:#2c2c2e;border-radius:18px 18px 18px 6px;padding:10px 12px;font-size:15px;line-height:1.4;border-left:3px solid var(--blue);word-break:break-word}
+.bubble-time{font-size:11px;color:var(--muted);margin:3px 0 0 6px}
+.list .row{align-items:flex-start;padding:12px 0}
+.row .main .cat{margin-top:1px}
+.net-svg{height:176px}
