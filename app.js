@@ -1004,6 +1004,225 @@ function renderActivity() {
     <div class="card list" id="actlog">${items.length ? items.map(actRow).join("") : `<div class="empty">No activity yet</div>`}</div>
     <div class="note">Scanner kills and graduations are left out of this feed (hundreds per night); they are in each agent’s decision list.</div>`;
 }
+
+/* ---------- Limits / PAPER gates editor (Account) ---------- */
+let SET_EDITS = {}, SET_ROWS = [];
+function formatSetNum(value, step) {
+  const n = Number(value);
+  if (!isFinite(n)) return "";
+  let d = 0;
+  if (numOk(step) && Number(step) > 0 && Number(step) < 1) {
+    const s = String(step);
+    const i = s.indexOf(".");
+    d = i >= 0 ? s.length - i - 1 : 0;
+  } else if (numOk(step) && Number(step) >= 1) d = 0;
+  else {
+    const s = String(n);
+    const i = s.indexOf(".");
+    d = i >= 0 ? Math.min(6, s.length - i - 1) : 0;
+  }
+  const t = Math.pow(10, d);
+  const r = Math.round(n * t) / t;
+  let out = d > 0 ? r.toFixed(d) : String(Math.round(r));
+  if (d > 0) out = out.replace(/\.?0+$/, "");
+  return out === "-0" ? "0" : out;
+}
+function settingUnit(s) { return String((s && s.unit) || ""); }
+function formatSetShown(value, s) {
+  const n = formatSetNum(value, s && s.step);
+  if (n === "") return "—";
+  const u = settingUnit(s);
+  if (u === "%") return n + "%";
+  if (u === "$") return "$" + n;
+  return u ? n + u : n;
+}
+/** Isolated Telegram start-code encoder. Chief's encoding: set_<start_code>_<value>,
+ *  max 64 chars, charset [A-Za-z0-9_-]. Decimal point → 'd'. No minus mapping.
+ *  start_code is the alias only (e.g. top10, alive); this function adds set_. */
+function encodeStartValue(value, step) {
+  return String(formatSetNum(value, step)).replace(/\./g, "d").replace(/[^A-Za-z0-9_]/g, "");
+}
+function startCodeAlias(setting) {
+  const raw = (setting && (setting.start_code || setting.startCode)) || "";
+  let a = String(raw);
+  if (/^set_/i.test(a)) a = a.slice(4);
+  return a.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
+}
+function startCodeFor(setting, value) {
+  const alias = startCodeAlias(setting);
+  const enc = encodeStartValue(value, setting && setting.step);
+  if (!alias || enc === "") return "";
+  return ("set_" + alias + "_" + enc).slice(0, 64);
+}
+function startCodeOk(code) { return /^[A-Za-z0-9_-]{1,64}$/.test(String(code || "")); }
+function isNewSettingItem(x) {
+  return !!(x && typeof x === "object" && !Array.isArray(x) && (x.key != null && String(x.key) !== "") && x.value != null && (numOk(x.min) || numOk(x.max) || numOk(x.step) || "can_loosen" in x || "loosen_dir" in x || x.group));
+}
+function normSetting(s, keyHint) {
+  const key = String((s && s.key) || keyHint || "");
+  return {
+    key,
+    label: (s && (s.label || s.name || s.title)) || key,
+    value: s && s.value,
+    min: s && s.min,
+    max: s && s.max,
+    step: s && s.step,
+    unit: (s && s.unit) || "",
+    can_loosen: s && s.can_loosen,
+    loosen_dir: (s && (s.loosen_dir || s.loosenDir)) || "",
+    group: (s && s.group) || "",
+    start_code: (s && (s.start_code || s.startCode)) || "",
+    alias: (s && (s.alias || s.start_alias)) || "",
+  };
+}
+function settingLoosenDir(s) {
+  const d = String((s && s.loosen_dir) || "").toLowerCase();
+  if (d === "up" || d === "down") return d;
+  const k = String((s && s.key) || "").toLowerCase();
+  if (k.startsWith("min_") || k.includes("liquidity") || /(?:^|[._])min(?:[._]|$)/.test(k) || k.includes("min_")) return "down";
+  return "up";
+}
+function settingCanLoosen(s) {
+  if (!s || s.can_loosen == null || s.can_loosen === "") return true;
+  return !(s.can_loosen === false || s.can_loosen === 0 || String(s.can_loosen).toLowerCase() === "false");
+}
+function guessSetGroup(s) {
+  const g = String((s && s.group) || "").toLowerCase();
+  if (g === "limits" || g === "limit") return "limits";
+  if (g === "gates" || g === "gate" || g === "paper" || g === "paper_gates" || g === "paper gates") return "gates";
+  const k = String((s && s.key) || "").toLowerCase();
+  if (/risk_per_trade|max_exposure|daily_loss|day_loss/.test(k)) return "limits";
+  return "gates";
+}
+function groupSettings(items) {
+  const limits = [], gates = [], other = [];
+  items.forEach((s) => {
+    const g = guessSetGroup(s);
+    if (g === "limits") limits.push(s);
+    else if (g === "gates") gates.push(s);
+    else other.push(s);
+  });
+  const groups = [];
+  if (limits.length) groups.push({ id: "limits", name: "Limits", items: limits });
+  if (gates.length) groups.push({ id: "gates", name: "PAPER gates", items: gates });
+  if (other.length) groups.push({ id: "other", name: "Settings", items: other });
+  return groups;
+}
+function readSettings(b) {
+  if (!b) return null;
+  const raw = (b.settings != null) ? b.settings : (b.state && b.state.settings);
+  if (raw == null) return null;
+  if (Array.isArray(raw)) {
+    const items = raw.filter(isNewSettingItem).map((s) => normSetting(s));
+    if (!items.length) return raw.length ? null : { groups: [] };
+    return { groups: groupSettings(items) };
+  }
+  if (typeof raw !== "object") return null;
+  if (Array.isArray(raw.items)) {
+    const items = raw.items.filter(isNewSettingItem).map((s) => normSetting(s));
+    return { groups: groupSettings(items) };
+  }
+  if (Array.isArray(raw.groups)) {
+    const groups = [];
+    raw.groups.forEach((g) => {
+      const its = (g && (g.items || g.settings || [])) || [];
+      const items = (Array.isArray(its) ? its : []).filter(isNewSettingItem).map((s) => normSetting(s));
+      if (items.length) groups.push({ id: g.group || guessSetGroup(items[0]), name: g.name || g.label || (guessSetGroup(items[0]) === "limits" ? "Limits" : "PAPER gates"), items });
+    });
+    return groups.length || raw.groups.length ? { groups } : null;
+  }
+  const entries = Object.entries(raw);
+  const looksNew = entries.some(([, v]) => isNewSettingItem(v) || (v && typeof v === "object" && !Array.isArray(v) && (numOk(v.min) || numOk(v.max) || numOk(v.step) || "can_loosen" in v || "loosen_dir" in v)));
+  if (!looksNew) return null;
+  const items = [];
+  entries.forEach(([k, v]) => {
+    if (v && typeof v === "object" && !Array.isArray(v) && (isNewSettingItem({ ...v, key: v.key || k }) || numOk(v.min) || numOk(v.max))) {
+      items.push(normSetting(v, k));
+    }
+  });
+  return items.length ? { groups: groupSettings(items) } : null;
+}
+function editBounds(s) {
+  let min = numOk(s.min) ? Number(s.min) : -Infinity;
+  let max = numOk(s.max) ? Number(s.max) : Infinity;
+  const cur = Number(s.value);
+  if (!settingCanLoosen(s) && isFinite(cur)) {
+    if (settingLoosenDir(s) === "up") max = Math.min(max, cur);
+    else min = Math.max(min, cur);
+  }
+  return { min, max };
+}
+function clampSetting(s, v) {
+  let n = Number(v);
+  if (!isFinite(n)) n = Number(s.value);
+  const b = editBounds(s);
+  if (isFinite(b.min)) n = Math.max(b.min, n);
+  if (isFinite(b.max)) n = Math.min(b.max, n);
+  const step = numOk(s.step) ? Number(s.step) : 0;
+  const base = numOk(s.min) ? Number(s.min) : 0;
+  if (step > 0) {
+    n = base + Math.round((n - base) / step) * step;
+    if (isFinite(b.min)) n = Math.max(b.min, n);
+    if (isFinite(b.max)) n = Math.min(b.max, n);
+  }
+  return n;
+}
+function editedValue(s) {
+  if (SET_EDITS[s.key] != null && isFinite(Number(SET_EDITS[s.key]))) return Number(SET_EDITS[s.key]);
+  return Number(s.value);
+}
+function settingChanged(s) {
+  const a = formatSetNum(editedValue(s), s.step), b = formatSetNum(s.value, s.step);
+  return a !== "" && b !== "" && a !== b;
+}
+function findSetting(key) { return SET_ROWS.find((s) => s.key === key); }
+function nudgeSetting(key, val, abs) {
+  const s = findSetting(key);
+  if (!s || !numOk(s.min) || !numOk(s.max) || !numOk(s.step)) return;
+  const next = clampSetting(s, abs ? val : (editedValue(s) + Number(val) * Number(s.step)));
+  SET_EDITS[key] = next;
+  const row = document.querySelector('[data-set-row="' + CSS.escape(key) + '"]');
+  if (row) row.outerHTML = settingRowHtml(s);
+}
+function settingRowHtml(s) {
+  const editable = numOk(s.min) && numOk(s.max) && numOk(s.step);
+  const cur = Number(s.value), edit = editedValue(s);
+  const changed = settingChanged(s);
+  const bounds = editable ? editBounds(s) : { min: cur, max: cur };
+  const step = numOk(s.step) ? Number(s.step) : 1;
+  const minusOff = !editable || edit <= bounds.min;
+  const plusOff = !editable || edit >= bounds.max;
+  const code = startCodeFor(s, edit);
+  const okCode = startCodeOk(code);
+  const cmd = "/set " + startCodeAlias(s) + " " + formatSetNum(edit, s.step);
+  const bot = ((B() && B().links && B().links.bot_url) || "https://t.me/Spearhedbot");
+  const saveOn = changed && okCode && editable;
+  const note = !settingCanLoosen(s) ? `<div class="set-note">Tightening only — loosening needs a change on the desk</div>` : "";
+  const href = bot + "?start=" + encodeURIComponent(code);
+  return `<div class="set-row" data-set-row="${esc(s.key)}">
+    <div class="set-head"><div class="set-label">${esc(s.label)}<small>${esc(s.key)}</small></div>
+      <div class="set-vals"><span class="now">${esc(formatSetShown(cur, s))}</span>${changed ? `<span class="edit changed">→ ${esc(formatSetShown(edit, s))}</span>` : ""}</div></div>
+    ${editable ? `<div class="set-ctrl">
+      <button type="button" class="set-step" data-set-key="${esc(s.key)}" data-set-step="-1" ${minusOff ? "disabled" : ""} aria-label="Decrease">−</button>
+      <input type="range" data-set-slide="${esc(s.key)}" min="${esc(String(isFinite(bounds.min) ? bounds.min : s.min))}" max="${esc(String(isFinite(bounds.max) ? bounds.max : s.max))}" step="${esc(s.step)}" value="${esc(String(edit))}" aria-label="${esc(s.label)}">
+      <button type="button" class="set-step" data-set-key="${esc(s.key)}" data-set-step="1" ${plusOff ? "disabled" : ""} aria-label="Increase">+</button>
+    </div>` : `<div class="set-note">Range not provided</div>`}
+    ${note}
+    <div class="set-save">
+      ${saveOn ? `<a class="tix-btn go" href="${esc(href)}" target="_blank" rel="noopener">Save</a>` : `<button type="button" class="tix-btn go" disabled>Save</button>`}
+      <button type="button" class="set-cmd" data-copy="${esc(cmd)}" data-copymsg="Command copied">${esc(cmd)}</button>
+    </div>
+  </div>`;
+}
+function settingsHtml(b) {
+  const parsed = readSettings(b);
+  if (!parsed) return `<div class="wait">Loading settings from your desk…</div><div class="note">Save opens Telegram; send the command there to apply it.</div>`;
+  SET_ROWS = parsed.groups.flatMap((g) => g.items);
+  if (!SET_ROWS.length) return `<div class="wait">No settings yet</div><div class="note">Save opens Telegram; send the command there to apply it.</div>`;
+  const body = parsed.groups.map((g) => `<div class="set-group"><h3>${esc(g.name)}</h3>${g.items.map(settingRowHtml).join("")}</div>`).join("");
+  return `${body}<div class="note">Save opens Telegram; send the command there to apply it.</div>`;
+}
+
 function renderAccount() {
   const b = B(), a = b.account, L = b.links, live = a.mode === "LIVE";
   $("#v-account").innerHTML = `<h1 class="t">Account</h1>
@@ -1015,7 +1234,9 @@ function renderAccount() {
       <div class="kv"><span>Fees paid (after ${Math.round(a.fees_ref_discount * 100)}% referral discount)</span><span>${money(a.fees_paid_usd)}</span></div>
       <div class="field"><input id="stackin" type="number" inputmode="decimal" min="1" value="${a.stack_usd.toFixed(2)}" aria-label="Stack"><button class="btn sm" data-stack>Set stack</button></div>
       <div class="note">Stack changes go through Telegram (${esc(L.bot_name)}).</div></div>
-    <div class="card"><a class="link" href="#" data-settings><span>Settings<br><span class="muted" style="font-size:13px">All ${Object.keys(b.settings || {}).filter((k) => /^(scanner|auditor|analyst|executor|risk|desk)\./.test(k) && !k.endsWith("_source") && !k.endsWith("key_present") && !["desk.fees_ref_discount", "scanner.copycat_min_gain_pct"].includes(k)).length} settings · tap to change via Telegram</span></span><span class="chev">›</span></a></div>
+    <div class="sec" id="desksets-hd"><h2>Settings</h2></div>
+    <div class="card" id="desksets">${settingsHtml(b)}</div>
+    <div class="card"><a class="link" href="#" data-settings><span>All desk keys<br><span class="muted" style="font-size:13px">Tap to change other keys via Telegram</span></span><span class="chev">›</span></a></div>
     <div class="card"><a class="link" href="${esc(L.profile_url)}" target="_blank" rel="noopener"><span>Your FOMO profile<br><span class="muted" style="font-size:13px">${esc(L.fomo_handle)}</span></span><span class="chev">›</span></a>
       <a class="link" href="#" data-invite><span>Invite a friend</span><span class="chev">›</span></a></div>
     <div class="card"><div class="kv"><span>Alerts</span><span>Telegram ${esc(L.bot_name)}</span></div><div class="note">Web push isn’t available in this static, no-server setup. Every buy/sell alert arrives in Telegram with its FOMO button.</div></div>
@@ -1146,11 +1367,17 @@ window.addEventListener("popstate", () => { if (stack.length) { stack.pop(); if 
 function setTab(t) { tab = t; closeScreens(); document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== "v-" + t)); document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === t)); window.scrollTo(0, 0); render(); if (t === "home") drawHome(); }
 function render() { const b = B(); if (!b) return; const mb = $("#modebar"), md = b.state.mode; mb.hidden = false; mb.className = md === "PAPER" ? "paper" : "live"; mb.textContent = md === "PAPER" ? "PAPER · simulated fills, no real money" : "LIVE · money moves only when you tap Buy on FOMO"; ({ home: renderHome, agents: renderAgents, activity: renderActivity, account: renderAccount })[tab](); const sb = $("#stale"), age = Date.now() / 1000 - b.ts; sb.hidden = age <= STALE_S; sb.textContent = `STALE · last update ${Math.round(age)}s ago`; }
 
+document.addEventListener("input", (e) => {
+  const sl = e.target.closest("[data-set-slide]");
+  if (!sl) return;
+  nudgeSetting(sl.dataset.setSlide, sl.value, true);
+});
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-tab],[data-go],[data-r],[data-coin],[data-audit],[data-back],[data-sw],[data-more],[data-mode],[data-stack],[data-invite],[data-settings],[data-set],[data-sheetclose],[data-sheetgo],[data-copy]"); if (!t) return;
+  const t = e.target.closest("[data-tab],[data-go],[data-r],[data-coin],[data-audit],[data-back],[data-sw],[data-more],[data-mode],[data-stack],[data-invite],[data-settings],[data-set],[data-sheetclose],[data-sheetgo],[data-copy],[data-set-step]"); if (!t) return;
   const D = t.dataset, b = B();
-  if (D.settings !== undefined) { e.preventDefault(); renderSettings(); }
-  else if (D.copy) { e.preventDefault(); try { await navigator.clipboard.writeText(D.copy); toast("Mint copied"); } catch (err) { toast("Could not copy mint"); } }
+  if (D.setStep != null && D.setKey) { e.preventDefault(); nudgeSetting(D.setKey, Number(D.setStep)); }
+  else if (D.settings !== undefined) { e.preventDefault(); renderSettings(); }
+  else if (D.copy) { e.preventDefault(); try { await navigator.clipboard.writeText(D.copy); toast(D.copymsg || (String(D.copy).startsWith("/") ? "Command copied" : "Mint copied")); } catch (err) { toast("Could not copy"); } }
   else if (D.set) openSheet(D.set); else if (D.sheetclose !== undefined) $("#sheet").hidden = true; else if (D.sheetgo) sheetGo(D.sheetgo);
   else if (D.tab) setTab(D.tab); else if (D.go) setTab(D.go);
   else if (D.r) { range = D.r; renderHome(); }
