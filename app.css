@@ -293,3 +293,11 @@ table.pos th:last-child,table.pos td.pos-pnl{text-align:right;width:72px;overflo
 .set-save .tix-btn{flex:none}
 .set-save .tix-btn[disabled]{opacity:.4;pointer-events:none}
 .set-cmd{background:none;border:0;color:var(--cyan);font-family:"Roboto Mono",ui-monospace,monospace;font-size:12px;text-align:left;padding:0;cursor:pointer}
+
+.tix-tf{margin-top:8px}
+.tix-tf-tag{display:flex;flex-wrap:wrap;align-items:center;gap:5px 8px;font-size:11px;line-height:1.35}
+.tix-tf-hor{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:9px;font-size:10px;font-weight:800;letter-spacing:.03em;background:rgba(100,210,255,.14);color:var(--cyan)}
+.tix-tf-hor.swing{background:rgba(10,132,255,.16);color:var(--blue)}
+.tix-tf-sr{font-family:"Roboto Mono",ui-monospace,monospace;font-size:11px;color:rgba(235,235,245,.78)}
+.tix-tf-sr.none{color:var(--muted);font-style:italic;font-family:Roboto,system-ui,sans-serif;font-weight:400}
+.tix-tf-chart{display:block;width:100%;height:60px;margin-top:6px;border-radius:6px;background:rgba(255,255,255,.03);overflow:hidden}

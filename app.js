@@ -765,6 +765,160 @@ function ticketIntelHtml(t, b) {
   if (!buzz && !val && !th) return "";
   return `<div class="tix-intel">${buzz}${val}${th}</div>`;
 }
+
+function isTfObj(v) {
+  return !!(v && typeof v === "object" && !Array.isArray(v));
+}
+function ticketTimeframe(t, b) {
+  const v = ticketIntel(t, b, "timeframe");
+  return isTfObj(v) ? v : null;
+}
+function tfPx(p) {
+  const n = Number(p);
+  if (!isFinite(n) || n < 0) return "";
+  if (n === 0) return "0";
+  if (n >= 1000) return String(Math.round(n));
+  if (n >= 1) return String(Number(n.toPrecision(4)));
+  const dig = Math.min(10, Math.max(2, Math.ceil(-Math.log10(n)) + 2));
+  return String(Number(n.toFixed(dig)));
+}
+function tfHorizonLabel(h) {
+  const s = String(h == null ? "" : h).trim().toLowerCase();
+  if (!s) return "";
+  if (s === "scalp") return "Scalp";
+  if (s === "swing") return "Swing";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function tfTfLabel(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!s) return "";
+  const low = s.toLowerCase();
+  return /^(?:\d+(?:\.\d+)?)(s|m|h|d)$/.test(low) ? low : s;
+}
+function tfIsFallback(tf) {
+  return !!(tf && (tf.fallback === true || tf.fallback === 1 || String(tf.fallback).toLowerCase() === "true"));
+}
+function tfLevels(tf) {
+  const raw = tf && tf.sr_levels;
+  if (!Array.isArray(raw) || !raw.length) return [];
+  const out = [];
+  for (const lv of raw) {
+    if (!isTfObj(lv)) continue;
+    const side = String(lv.side || lv.kind || "").toLowerCase();
+    const letter = (side === "support" || side === "s") ? "S" : ((side === "resistance" || side === "r") ? "R" : "");
+    if (!letter) continue;
+    const price = Number(lv.price);
+    if (!isFinite(price) || price < 0) continue;
+    const touches = numOk(lv.touches) ? Math.round(Number(lv.touches)) : null;
+    out.push({ letter, price, touches });
+  }
+  return out;
+}
+function tfPickLevel(levels, letter) {
+  const xs = levels.filter((l) => l.letter === letter);
+  if (!xs.length) return null;
+  xs.sort((a, b) => ((b.touches != null ? b.touches : -1) - (a.touches != null ? a.touches : -1)) || a.price - b.price);
+  return xs[0];
+}
+function tfSrBits(tf) {
+  const levels = tfLevels(tf);
+  const parts = [];
+  for (const letter of ["S", "R"]) {
+    const lv = tfPickLevel(levels, letter);
+    if (!lv) continue;
+    const price = tfPx(lv.price);
+    if (!price) continue;
+    parts.push(letter + " " + price + (lv.touches != null ? " (" + lv.touches + ")" : ""));
+  }
+  return parts;
+}
+function tfParseCandle(row) {
+  let o, h, l, c;
+  if (Array.isArray(row) && row.length >= 5) {
+    o = Number(row[1]); h = Number(row[2]); l = Number(row[3]); c = Number(row[4]);
+  } else if (isTfObj(row)) {
+    o = Number(row.o != null ? row.o : row.open);
+    h = Number(row.h != null ? row.h : row.high);
+    l = Number(row.l != null ? row.l : row.low);
+    c = Number(row.c != null ? row.c : row.close);
+  } else return null;
+  if (![o, h, l, c].every(isFinite)) return null;
+  const hi = Math.max(h, o, c, l);
+  const lo = Math.min(l, o, c, h);
+  if (!isFinite(hi) || !isFinite(lo)) return null;
+  return { o: o, h: hi, l: lo, c: c };
+}
+function tfParseCandles(tf) {
+  const raw = tf && tf.candles;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const row of raw) {
+    const bar = tfParseCandle(row);
+    if (bar) out.push(bar);
+  }
+  return out;
+}
+function tfCandleChart(tf) {
+  const all = tfParseCandles(tf);
+  if (all.length < 2) return "";
+  const bars = all.length > 52 ? all.slice(-52) : all;
+  const levels = tfLevels(tf);
+  const w = 360, h = 60, padX = 2, padY = 4;
+  let lo = Math.min.apply(null, bars.map((b) => b.l));
+  let hi = Math.max.apply(null, bars.map((b) => b.h));
+  if (!isFinite(lo) || !isFinite(hi)) return "";
+  const span = hi > lo ? hi - lo : Math.max(Math.abs(hi) * 0.001, 1e-12);
+  const near = span * 0.2;
+  for (const lv of levels) {
+    if (lv.price >= lo - near && lv.price <= hi + near) {
+      if (lv.price < lo) lo = lv.price;
+      if (lv.price > hi) hi = lv.price;
+    }
+  }
+  if (!(hi > lo)) { const mid = lo; const pad = Math.max(Math.abs(mid) * 0.001, 1e-12); lo = mid - pad; hi = mid + pad; }
+  else { const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; }
+  const innerW = w - padX * 2, innerH = h - padY * 2;
+  const n = bars.length;
+  const slot = innerW / n;
+  const bodyW = Math.max(1, Math.min(slot * 0.62, slot - 0.8));
+  const Y = (v) => padY + (1 - (v - lo) / (hi - lo)) * innerH;
+  let svg = "";
+  for (const lv of levels) {
+    if (lv.price < lo || lv.price > hi) continue;
+    const y = Y(lv.price).toFixed(2);
+    const stroke = lv.letter === "S" ? "rgba(100,210,255,.55)" : "rgba(255,159,10,.55)";
+    svg += `<line x1="${padX}" x2="${w - padX}" y1="${y}" y2="${y}" stroke="${stroke}" stroke-width="1" stroke-dasharray="3 2" />`;
+  }
+  for (let i = 0; i < n; i++) {
+    const b = bars[i];
+    const mid = padX + (i + 0.5) * slot;
+    const col = b.c >= b.o ? "#00d35a" : "#ff453a";
+    const yH = Y(b.h), yL = Y(b.l);
+    let yTop = Math.min(Y(b.o), Y(b.c)), yBot = Math.max(Y(b.o), Y(b.c));
+    if (yBot - yTop < 1) { const m = (yTop + yBot) / 2; yTop = m - 0.5; yBot = m + 0.5; }
+    svg += `<line x1="${mid.toFixed(2)}" x2="${mid.toFixed(2)}" y1="${yH.toFixed(2)}" y2="${yL.toFixed(2)}" stroke="${col}" stroke-width="1" />`;
+    svg += `<rect x="${(mid - bodyW / 2).toFixed(2)}" y="${yTop.toFixed(2)}" width="${bodyW.toFixed(2)}" height="${(yBot - yTop).toFixed(2)}" fill="${col}" />`;
+  }
+  return `<svg class="tix-tf-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${svg}</svg>`;
+}
+function ticketTimeframeHtml(t, b) {
+  const tf = ticketTimeframe(t, b);
+  if (!isTfObj(tf)) return "";
+  const hor = tfHorizonLabel(tf.horizon);
+  const unit = tfTfLabel(tf.tf);
+  if (!hor && !unit && !tfLevels(tf).length && tfParseCandles(tf).length < 2 && !tfIsFallback(tf)) return "";
+  let head = [hor, unit].filter(Boolean).join(" · ");
+  if (tfIsFallback(tf)) head = (head ? head + " · " : "") + "1m fallback";
+  if (!head) head = "Timeframe";
+  const srParts = tfSrBits(tf);
+  const reason = (tf.sr_reason != null && String(tf.sr_reason).trim()) ? String(tf.sr_reason).trim() : "";
+  const title = reason ? ` title="${esc(reason)}"` : "";
+  const srHtml = srParts.length
+    ? `<span class="tix-tf-sr"${title}>${esc(srParts.join(" · "))}</span>`
+    : `<span class="tix-tf-sr none"${title}>no S/R yet</span>`;
+  const cls = (String(tf.horizon || "").toLowerCase() === "swing") ? "swing" : "scalp";
+  return `<div class="tix-tf"><div class="tix-tf-tag"><span class="tix-tf-hor ${cls}">${esc(head)}</span>${srHtml}</div>${tfCandleChart(tf)}</div>`;
+}
 function ticketsHtml(b) {
   const list = pickList(b, "tickets");
   if (!list) return WAIT;
@@ -799,6 +953,7 @@ function ticketsHtml(b) {
       <div class="tix-top"><div class="tix-id">#${esc(id || "—")}</div><div class="tix-flags">${ticketStatusChip(t)}${ticketAutoTag(t)}</div></div>
       <div class="tix-asset">${esc(t.asset || t.symbol || t.name || "—")} <span class="tix-dir">${esc(dir)}</span></div>
       ${mint ? `<button type="button" class="idea-mint" data-copy="${esc(mint)}">${esc(shortMint(mint))} · tap to copy</button>` : `<div class="dd">mint —</div>`}
+      ${ticketTimeframeHtml(t, b)}
       <div class="tix-grid">
         <div><label>Size</label><b>${esc(size)}</b></div>
         <div><label>Entry</label><b>${esc(entry)}</b></div>
