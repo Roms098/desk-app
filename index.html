@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link rel="stylesheet" href="app.css?v=10" />
+  <title>Trading Desk</title>
+</head>
+<body>
+  <div id="locked"><h1>Locked</h1><div class="muted">Open the private link to unlock.</div></div>
+  <div id="app" hidden>
+    <div id="modebar" hidden></div>
+    <div id="stale" class="banner" hidden></div>
+    <main id="views">
+      <section id="v-home" class="view"></section>
+      <section id="v-agents" class="view" hidden></section>
+      <section id="v-activity" class="view" hidden></section>
+      <section id="v-account" class="view" hidden></section>
+    </main>
+    <section id="s-coin" class="screen" hidden></section>
+    <section id="s-audit" class="screen" hidden></section>
+    <section id="s-settings" class="screen" hidden></section>
+    <div id="sheet" hidden></div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="home" class="on"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+      <button data-tab="agents"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.6 3-6 7-6s7 2.4 7 6"/></svg>Agents</button>
+      <button data-tab="activity"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>Activity</button>
+      <button data-tab="account"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18"/></svg>Account</button>
+    </nav>
+    <div id="toast" hidden></div>
+  </div>
+  <script src="app.js?v=8"></script>
+</body>
+</html>
